@@ -1,4 +1,4 @@
-package com.headius.jruby.pg_ext;
+package org.jruby.pg;
 
 import org.jruby.Ruby;
 import org.jruby.RubyClass;

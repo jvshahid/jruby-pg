@@ -1,4 +1,4 @@
-package com.headius.jruby.pg_ext;
+package org.jruby.pg;
 
 import org.jruby.runtime.builtin.IRubyObject;
 

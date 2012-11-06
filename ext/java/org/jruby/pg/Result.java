@@ -1,4 +1,4 @@
-package com.headius.jruby.pg_ext;
+package org.jruby.pg;
 
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;

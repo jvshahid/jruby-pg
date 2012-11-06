@@ -1,4 +1,4 @@
-package com.headius.jruby.pg_ext;
+package org.jruby.pg;
 
 import java.io.ByteArrayOutputStream;
 import java.io.PrintWriter;
@@ -60,7 +60,7 @@ public class Connection extends RubyObject {
     protected BaseConnection connection;
     protected org.jcodings.Encoding encoding;
     protected IRubyObject rubyEncoding;
-    protected Map<String, com.headius.jruby.pg_ext.PgPreparedStatement> preparedQueries = new HashMap<String, com.headius.jruby.pg_ext.PgPreparedStatement>();
+    protected Map<String, org.jruby.pg.PgPreparedStatement> preparedQueries = new HashMap<String, org.jruby.pg.PgPreparedStatement>();
 
     static {
       postgresEncodingToRubyEncoding.put("BIG5",          "Big5"        );
@@ -521,7 +521,7 @@ public class Connection extends RubyObject {
               Map<Integer, List<Integer> > indexToQueryParameter = new HashMap<Integer, List<Integer>>();
               query = fixQueryParametersSyntax(query, indexToQueryParameter);
               PreparedStatement statement = connection.prepareStatement(query, ResultSet.TYPE_SCROLL_INSENSITIVE, ResultSet.CONCUR_READ_ONLY);
-              com.headius.jruby.pg_ext.PgPreparedStatement st = new com.headius.jruby.pg_ext.PgPreparedStatement(statement, indexToQueryParameter);
+              org.jruby.pg.PgPreparedStatement st = new org.jruby.pg.PgPreparedStatement(statement, indexToQueryParameter);
               set = getPreparedStatmentResult(context, st, args);
             }
 
@@ -628,7 +628,7 @@ public class Connection extends RubyObject {
         Map<Integer, List<Integer>> indexMapping = new HashMap<Integer, List<Integer>>();
         query = fixQueryParametersSyntax(query, indexMapping);
         PreparedStatement _st = connection.prepareStatement(query, ResultSet.TYPE_SCROLL_INSENSITIVE, ResultSet.CONCUR_READ_ONLY);
-        com.headius.jruby.pg_ext.PgPreparedStatement st = new com.headius.jruby.pg_ext.PgPreparedStatement(_st, indexMapping);
+        org.jruby.pg.PgPreparedStatement st = new org.jruby.pg.PgPreparedStatement(_st, indexMapping);
         preparedQueries.put(queryName, st);
 
         return get_empty_result(context);
