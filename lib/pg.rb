@@ -4,7 +4,7 @@ if RUBY_PLATFORM == 'java'
   require 'pg_ext'
   require 'postgresql-9.1-903.jdbc4.jar'
   require 'jruby'
-  com.headius.jruby.pg_ext.Postgresql.new.load(JRuby.runtime, false)
+  org.jruby.pg.Postgresql.new.load(JRuby.runtime, false)
 else
   begin
     require 'pg_ext'

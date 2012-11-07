@@ -7,6 +7,7 @@ import org.jruby.RubyClass;
 import org.jruby.RubyFixnum;
 import org.jruby.RubyModule;
 import org.jruby.anno.JRubyMethod;
+import org.jruby.pg.internal.ConnectionState;
 import org.jruby.runtime.ThreadContext;
 import org.jruby.runtime.builtin.IRubyObject;
 import org.jruby.runtime.load.Library;
@@ -15,10 +16,6 @@ import org.postgresql.largeobject.LargeObject;
 import org.postgresql.largeobject.LargeObjectManager;
 
 public class Postgresql implements Library {
-    public static enum ConnectionStatus {
-      CONNECTION_OK, CONNECTION_BAD;
-    };
-
     @Override
     public void load(Ruby ruby, boolean wrap) throws IOException {
         RubyModule pg = ruby.defineModule("PG");
@@ -26,7 +23,7 @@ public class Postgresql implements Library {
         RubyModule pgConstants = ruby.defineModuleUnder("Constants", pg);
 
         // create the connection status constants
-        for(ConnectionStatus status : ConnectionStatus.values())
+        for(ConnectionState status : ConnectionState.values())
           pg.defineConstant(status.name(), new RubyFixnum(ruby, status.ordinal()));
 
         // create the large object constants

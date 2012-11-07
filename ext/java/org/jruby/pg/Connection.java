@@ -1,12 +1,14 @@
+
 package org.jruby.pg;
 
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.io.PrintWriter;
+import java.nio.channels.SocketChannel;
 import java.sql.DatabaseMetaData;
 import java.sql.Driver;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
-import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Types;
@@ -28,12 +30,16 @@ import org.jruby.RubyEncoding;
 import org.jruby.RubyException;
 import org.jruby.RubyFixnum;
 import org.jruby.RubyHash;
+import org.jruby.RubyIO;
 import org.jruby.RubyModule;
 import org.jruby.RubyObject;
 import org.jruby.RubyString;
 import org.jruby.RubySymbol;
 import org.jruby.anno.JRubyMethod;
 import org.jruby.exceptions.RaiseException;
+import org.jruby.pg.internal.ConnectionState;
+import org.jruby.pg.internal.PostgresqlConnection;
+import org.jruby.pg.internal.ResultSet;
 import org.jruby.runtime.Block;
 import org.jruby.runtime.ObjectAllocator;
 import org.jruby.runtime.ThreadContext;
@@ -58,6 +64,7 @@ public class Connection extends RubyObject {
     protected static Result EMPTY_RESULT;
 
     protected BaseConnection connection;
+    protected PostgresqlConnection postgresqlConnection;
     protected org.jcodings.Encoding encoding;
     protected IRubyObject rubyEncoding;
     protected Map<String, org.jruby.pg.PgPreparedStatement> preparedQueries = new HashMap<String, org.jruby.pg.PgPreparedStatement>();
@@ -160,7 +167,14 @@ public class Connection extends RubyObject {
 
     @JRubyMethod(rest = true, meta = true)
     public static IRubyObject connect_start(ThreadContext context, IRubyObject self, IRubyObject[] args) {
-        return context.nil;
+      try {
+        Connection connection = new Connection(context.runtime, context.runtime.getModule("PG").getClass("Connection"));
+        Properties props = parse_args(context, args);
+        connection.postgresqlConnection = PostgresqlConnection.connectStart(props);
+        return connection;
+      } catch (IOException e) {
+        throw context.runtime.newIOError(e.getLocalizedMessage());
+      }
     }
 
     @JRubyMethod(rest = true, meta = true)
@@ -315,80 +329,36 @@ public class Connection extends RubyObject {
     public IRubyObject initialize(ThreadContext context, IRubyObject[] args) {
         this.rubyEncoding = context.nil;
 
-        String host = null;
-        String dbname = null;
-        Integer port = null;
-
         Properties props = parse_args(context, args);
-        Iterator<Entry<Object, Object>> iterator = props.entrySet().iterator();
-        while (iterator.hasNext()) {
-          Entry<Object, Object> entry = iterator.next();
-          if (entry.getKey().equals("host") || entry.getKey().equals("hostaddr")) {
-            host = (String) entry.getValue();
-            iterator.remove();
-          } else if (entry.getKey().equals("port")) {
-            port = Integer.parseInt((String) entry.getValue());
-            iterator.remove();
-          } else if (entry.getKey().equals("dbname")) {
-            dbname = (String) entry.getValue();
-            iterator.remove();
-          }
-        }
 
         try {
-            Driver driver = DriverManager.getDriver("jdbc:postgresql");
-
-            String connectionString = "";
-            if (host != null && port != null)
-              connectionString = "jdbc:postgresql://" + host + ":" + port + "/" + dbname;
-            else if (host != null)
-              connectionString = "jdbc:postgresql://" + host + "/" + dbname;
-            else
-              connectionString = "jdbc:postgresql:" + dbname;
-
-            // enable change in client encoding by issuing 'set client_encoding = foo' command
-            props.setProperty("allowEncodingChanges", "true");
-
-            connection = (BaseConnection)driver.connect(connectionString, props);
+            // connection = (BaseConnection)driver.connect(connectionString, props);
+            postgresqlConnection = PostgresqlConnection.connectDb(props);
             // set the encoding if the default internal_encoding is set
             set_default_encoding(context);
 
             LAST_CONNECTION = this;
-        } catch (SQLException sqle) {
-            throw context.runtime.newRuntimeError(sqle.getLocalizedMessage());
+        } catch (Exception e) {
+            throw context.runtime.newRuntimeError(e.getLocalizedMessage());
         }
         return context.nil;
     }
 
     @JRubyMethod
     public IRubyObject connect_poll(ThreadContext context) {
-        return context.nil;
+      ConnectionState state = postgresqlConnection.connectPoll();
+      return context.runtime.newFixnum(state.ordinal());
     }
 
     @JRubyMethod(name = {"finish", "close"})
     public IRubyObject finish(ThreadContext context) {
-      try {
-        if (connection.isClosed()) {
-          throw newPgError(context, "The connection is closed", encoding);
-        }
-        connection.close();
-        return context.nil;
-      } catch (SQLException e) {
-        throw context.runtime.newRuntimeError(e.getLocalizedMessage());
-      }
+      postgresqlConnection.close();
+      return context.nil;
     }
 
   @JRubyMethod
   public IRubyObject status(ThreadContext context) {
-    try {
-      if (connection.isClosed()) {
-        return context.getConstant("PG::CONNECTION_BAD");
-      } else {
-        return context.getRuntime().getModule("PG").getConstant("CONNECTION_OK");
-      }
-    } catch (SQLException ex) {
-      throw context.getRuntime().newRuntimeError(ex.getMessage());
-    }
+    return context.runtime.newFixnum(postgresqlConnection.status().ordinal());
   }
 
     @JRubyMethod(name = "finished?")
@@ -487,7 +457,9 @@ public class Connection extends RubyObject {
 
     @JRubyMethod
     public IRubyObject socket(ThreadContext context) {
-        return context.nil;
+      SocketChannel socket = postgresqlConnection.getSocket();
+      RubyIO rubyIO = RubyIO.newIO(context.runtime, socket);
+      return rubyIO.fileno(context);
     }
 
     @JRubyMethod
@@ -513,9 +485,7 @@ public class Connection extends RubyObject {
         ResultSet set = null;
         try {
             if (args.length == 1 || ((RubyArray) args[1]).getLength() == 0) {
-              Statement statement = connection.createStatement(ResultSet.TYPE_SCROLL_INSENSITIVE, ResultSet.CONCUR_READ_ONLY);
-              statement.execute(query);
-              set = statement.getResultSet();
+              postgresqlConnection.exec(query);
             } else {
               // change the parameters from $1 to ? and keep track of where each parameter is used
               Map<Integer, List<Integer> > indexToQueryParameter = new HashMap<Integer, List<Integer>>();
@@ -532,7 +502,7 @@ public class Connection extends RubyObject {
 
             if (set == null)
               return context.nil;
-        } catch (SQLException sqle) {
+        } catch (Exception sqle) {
             throw newPgError(context, sqle.getLocalizedMessage(), encoding);
         }
 
