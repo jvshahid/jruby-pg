@@ -6,9 +6,9 @@ public enum Format {
   public int getValue() {
     switch(this) {
     case Binary:
-      return 0;
-    case Text:
       return 1;
+    case Text:
+      return 0;
     default:
       throw new IllegalArgumentException("unkonwn format: " + name());
     }

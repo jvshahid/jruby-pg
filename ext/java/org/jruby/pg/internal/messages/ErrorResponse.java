@@ -3,6 +3,31 @@ package org.jruby.pg.internal.messages;
 import java.util.Map;
 
 public class ErrorResponse extends BackendMessage {
+  public static enum ErrorField {
+    PG_DIAG_SEVERITY('S'),
+		PG_DIAG_SQLSTATE('C'),
+		PG_DIAG_MESSAGE_PRIMARY('M'),
+		PG_DIAG_MESSAGE_DETAIL('D'),
+		PG_DIAG_MESSAGE_HINT('H'),
+		PG_DIAG_STATEMENT_POSITION('P'),
+		PG_DIAG_INTERNAL_POSITION('p'),
+		PG_DIAG_INTERNAL_QUERY('q'),
+		PG_DIAG_CONTEXT('W'),
+		PG_DIAG_SOURCE_FILE('F'),
+		PG_DIAG_SOURCE_LINE('L'),
+		PG_DIAG_SOURCE_FUNCTION('R');
+
+    private byte code;
+
+    private ErrorField(int code) {
+      this.code = (byte) code;
+    }
+
+    public byte getCode() {
+      return code;
+    }
+  }
+
   private final Map<Byte, String> fields;
   private final int length;
 
@@ -24,5 +49,10 @@ public class ErrorResponse extends BackendMessage {
 
   public Map<Byte, String> getFields() {
     return fields;
+  }
+
+  public boolean isFatal() {
+    String string = fields.get('S');
+    return string.equals("FATAL");
   }
 }

@@ -16,7 +16,6 @@ public class Startup extends ProtocolMessage {
       ByteUtils.writeInt2(out, 0);
       ByteUtils.writeString(out, "user");
       ByteUtils.writeString(out, user);
-      System.out.println("user: " + user + ", end");
       ByteUtils.writeString(out, "database");
       ByteUtils.writeString(out, database);
       for (Entry<Object, Object> entry : props.entrySet()) {
@@ -28,9 +27,7 @@ public class Startup extends ProtocolMessage {
       // we cannot be here
     }
     this.bytes = out.toByteArray();
-    System.out.println("length is: " + bytes.length);
     ByteUtils.fixLength(bytes, 0);
-    System.out.println("byte values: " + bytes[0] + ", " + bytes[1] + ", " + bytes[2] + ", " + bytes[3]);
   }
 
   @Override

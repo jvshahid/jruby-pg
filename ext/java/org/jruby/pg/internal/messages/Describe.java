@@ -31,6 +31,7 @@ public class Describe extends ProtocolMessage {
       // we cannot be here
     }
     this.bytes = out.toByteArray();
+    ByteUtils.fixLength(bytes);
   }
 
   @Override

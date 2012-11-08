@@ -18,11 +18,11 @@ describe PG::Result do
 
   it 'ftype should return the type oid of the column' do
     res = @conn.exec "SELECT 123::money as n"
-    res.ftype(1).should== PG::OID_MONEY
+    res.ftype(0).should== PG::OID_MONEY
   end
 
   it 'ftype should return the type oid of the column' do
     res = @conn.exec "SELECT 'foo'::bytea as n"
-    res.ftype(1).should== PG::OID_BYTEA
+    res.ftype(0).should== PG::OID_BYTEA
   end
 end

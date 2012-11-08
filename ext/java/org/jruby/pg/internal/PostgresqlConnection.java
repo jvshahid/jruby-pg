@@ -1,8 +1,14 @@
  package org.jruby.pg.internal;
 
+import static org.jruby.pg.internal.PostgresqlConnectionUtils.dbname;
+import static org.jruby.pg.internal.PostgresqlConnectionUtils.host;
+import static org.jruby.pg.internal.PostgresqlConnectionUtils.port;
+import static org.jruby.pg.internal.PostgresqlConnectionUtils.user;
+
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
+import java.nio.channels.ClosedChannelException;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
 import java.nio.channels.SocketChannel;
@@ -11,19 +17,28 @@ import java.util.Map;
 import java.util.Properties;
 
 import org.jruby.pg.internal.messages.BackendKeyData;
+import org.jruby.pg.internal.messages.Bind;
+import org.jruby.pg.internal.messages.CancelRequest;
+import org.jruby.pg.internal.messages.Close.StatementType;
 import org.jruby.pg.internal.messages.DataRow;
+import org.jruby.pg.internal.messages.Describe;
 import org.jruby.pg.internal.messages.ErrorResponse;
+import org.jruby.pg.internal.messages.Format;
+import org.jruby.pg.internal.messages.ParameterDescription;
 import org.jruby.pg.internal.messages.ParameterStatus;
+import org.jruby.pg.internal.messages.Parse;
 import org.jruby.pg.internal.messages.ProtocolMessage;
+import org.jruby.pg.internal.messages.ProtocolMessage.MessageType;
 import org.jruby.pg.internal.messages.ProtocolMessageBuffer;
 import org.jruby.pg.internal.messages.Query;
+import org.jruby.pg.internal.messages.ReadyForQuery;
 import org.jruby.pg.internal.messages.RowDescription;
 import org.jruby.pg.internal.messages.Startup;
-
-import static org.jruby.pg.internal.PostgresqlConnectionUtils.*;
+import org.jruby.pg.internal.messages.Terminate;
+import org.jruby.pg.internal.messages.TransactionStatus;
+import org.jruby.pg.internal.messsages.Sync;
 
 public class PostgresqlConnection {
-
   /** Static API (create a new connection) **/
   public static PostgresqlConnection connectDb(Properties props) throws Exception {
     PostgresqlConnection connection = new PostgresqlConnection(props);
@@ -40,61 +55,123 @@ public class PostgresqlConnection {
   /** Public API (execute, close, etc.) **/
 
   public ConnectionState status() {
-    return translateState();
+    return state.simpleState();
   }
 
   public void consumeInput() throws IOException {
-    connectPoll();
-  }
-
-  public ConnectionState connectPoll() throws IOException {
-    System.out.println("state: " + state.name());
     try {
-      switch(state) {
-      case SendingStartup:
-      case SendingAuthentication:
-      case SendingQuery:
-        flush();
-        break;
-      case ReadingAuthentication:
-      case ReadingAuthenticationResponse:
-      case ReadingBackendData:
-      case ReadingParameterStatus:
-        socket.read(currentInMessage.getBuffer());
-        break;
-      case ReadyForQuery:
-        break;
-      default:
-        throw new IllegalStateException("Unknown state: " + state.name());
+      if (state.isWrite()) {
+        flush();	// flush anyway there's no harm
+      } else if (state.isRead()) {
+        int read = socket.read(currentInMessage.getBuffer());
+        if (read == -1) {
+          // connection is closed
+          throw new ClosedChannelException();
+        }
+      } else if (!state.isIdle()) {
+        throw new IllegalStateException("Cannot consume input while connection is in " + state.name() + " state");
       }
     } catch (IOException e) {
       state = ConnectionState.Failed;
       throw e;
     }
     changeState();
-    return translateStateForPolling();
   }
 
-  public ResultSet exec(String query) throws IOException {
+  public ConnectionState connectPoll() throws IOException {
+    consumeInput();
+    return state.pollingState();
+  }
+
+  public ResultSet exec(String query) throws IOException, PostgresqlException {
     sendQuery(query);
-    ResultSet prevResult, result;
-    prevResult = result = null;
-    while ((result = getResult()) != null) {
-      prevResult = result;
-    }
-    return prevResult;
+    return waitForResult();
+  }
+
+  public ResultSet execQueryParams(String query, Value[] values, Format format, int [] oids) throws IOException, PostgresqlException {
+    sendQueryParams(query, values, format, oids);
+    return waitForResult();
+  }
+
+  public ResultSet execPrepared(String name, Value[] values, Format format) throws IOException, PostgresqlException {
+    sendExecPrepared(name, values, format);
+    return waitForResult();
+  }
+
+  public ResultSet prepare(String name, String query, int [] oids) throws IOException, PostgresqlException {
+    sendPrepareQuery(name, query, oids);
+    return waitForResult();
+  }
+
+  public ResultSet describePrepared(String name) throws IOException, PostgresqlException {
+    sendDescribePrepared(name);
+    return waitForResult();
+  }
+
+  public ResultSet describePortal(String name) throws IOException, PostgresqlException {
+    sendDescribePortal(name);
+    return waitForResult();
+  }
+
+  public void sendQueryParams(String query, Value[] values, Format format, int [] oids) throws IOException {
+    sendPrepareQuery("", query, oids);
+    shouldBind = true;
+    // storing the binding info for later
+    this.values = values;
+    this.format = format;
+  }
+
+  public void sendExecPrepared(String name, Value[] values, Format format) throws IOException {
+    checkIsReady();
+    currentOutBuffer = new Bind("", name, values, format).toBytes();
+    shouldDescribe = true;
+    shouldExecute = true;
+    state = ConnectionState.SendingBind;
+    if (!nonBlocking) socket.configureBlocking(true);
+    socket.write(currentOutBuffer);
+    if (!nonBlocking) socket.configureBlocking(false);
+    changeState();
+  }
+
+  public void sendExecutePortal(String name) throws IOException {
+    checkIsReady();
+    currentOutBuffer = new Execute(name).toBytes();
+    state = ConnectionState.SendingExecute;
+    if (!nonBlocking) socket.configureBlocking(true);
+    socket.write(currentOutBuffer);
+    if (!nonBlocking) socket.configureBlocking(false);
+    changeState();
+  }
+
+  public void sendDescribePortal(String name) throws IOException {
+    checkIsReady();
+    Describe message = new Describe(name, StatementType.Portal);
+    sendDescribeCommon(message);
+  }
+
+  public void sendDescribePrepared(String name) throws IOException {
+    checkIsReady();
+    Describe message = new Describe(name, StatementType.Prepared);
+    sendDescribeCommon(message);
   }
 
   public void sendQuery(String query) throws IOException {
-    if (state != ConnectionState.ReadyForQuery)
-      throw new IllegalStateException("Connection isn't ready for a new query");
-
-    currentOutMessage = new Query(query);
-    currentOutBuffer = currentInMessage.getBuffer();
+    checkIsReady();
+    currentOutBuffer = new Query(query).toBytes();
     state = ConnectionState.SendingQuery;
-
-    socket.configureBlocking(nonBlocking);
+    if (!nonBlocking) socket.configureBlocking(true);
     socket.write(currentOutBuffer);
+    if (!nonBlocking) socket.configureBlocking(false);
+    changeState();
+  }
+
+  public void sendPrepareQuery(String name, String query, int [] oids) throws IOException {
+    checkIsReady();
+    currentOutBuffer = new Parse(name, query, oids).toBytes();
+    state = ConnectionState.SendingParse;
+    if (!nonBlocking) socket.configureBlocking(true);
+    socket.write(currentOutBuffer);
+    if (!nonBlocking) socket.configureBlocking(false);
     changeState();
   }
 
@@ -102,7 +179,25 @@ public class PostgresqlConnection {
     return socket;
   }
 
-  public void close() {
+  public void close() throws IOException {
+    socket.configureBlocking(true);
+    currentOutBuffer = new Terminate().toBytes();
+    socket.write(currentOutBuffer);
+    socket.close();
+    state = ConnectionState.Closed;
+  }
+
+  public void cancel() throws IOException {
+    SocketChannel closeChannel = SocketChannel.open();
+    closeChannel.configureBlocking(true);
+    closeChannel.connect(new InetSocketAddress(host, port));
+    ByteBuffer bytes = new CancelRequest(backendKeyData.getPid(), backendKeyData.getSecret()).toBytes();
+    closeChannel.write(bytes);
+    closeChannel.close();
+  }
+
+  public boolean closed() {
+    return state == ConnectionState.Closed || state == ConnectionState.Failed;
   }
 
   public void setNonBlocking(boolean nonBlocking) {
@@ -114,47 +209,103 @@ public class PostgresqlConnection {
   }
 
   public boolean isBusy() {
-    if (state == ConnectionState.SendingQuery ||
-         state == ConnectionState.ReadingQueryResponse) {
+    if (state.shouldBlock() || state.isFlush() || state.isSync()) {
       return lastResultSet == null;
     }
     return false;
   }
 
   public ResultSet getResult() throws IOException {
-    if (state == ConnectionState.ReadyForQuery)
-      return null;
-
     if (!isBusy()) {
       ResultSet temp = lastResultSet;
       lastResultSet = null;
       return temp;
     }
 
-    // send all the data in the output buffer
-    Selector selector = Selector.open();
-    socket.register(selector, SelectionKey.OP_WRITE);
-    while (!flush()) {
+    while(isBusy()) {
+      Selector selector = Selector.open();
+      int op = state.isRead() ? SelectionKey.OP_READ : SelectionKey.OP_WRITE;
+      socket.register(selector, op);
       selector.select();
-    }
-    selector.keys().clear();
-
-    socket.register(selector, SelectionKey.OP_READ);
-    while (isBusy()) {
-      selector.select();
+      selector.close();
       consumeInput();
     }
     return getResult();
   }
 
   public boolean flush() throws IOException {
-    if (currentOutBuffer.remaining() == 0)
+    if (!state.isWrite() || currentOutBuffer.remaining() == 0)
       return true;
     socket.write(currentOutBuffer);
-    return currentInMessage.remaining() == 0;
+    return currentOutBuffer.remaining() == 0;
+  }
+
+  public int getServerVersion() {
+    String value = parameterValues.get("server_version");
+    if (value == null)
+      return 0;
+    String[] parts = value.split("\\.");
+    int version = 0;
+    for (int i = 0; i < parts.length; i++)
+      version = version * 100 + i;
+    return version;
+  }
+
+  public String getParameterStatus(String name) {
+    return parameterValues.get(name);
+  }
+
+  public int getBackendPid() {
+    return backendKeyData.getPid();
+  }
+
+  public TransactionStatus getTransactionStatus() {
+    return transactionStatus;
+  }
+
+  public boolean getStandardConformingStrings() {
+    String value = parameterValues.get("standard_conforming_strings");
+    System.out.println("value: " + value);
+    if (value == null || !value.equals("on"))
+      return false;
+    return true;
   }
 
   /** the shitty implementation the makes the connection ticks **/
+
+  private void checkError(ResultSet result) throws PostgresqlException {
+    if (result.hasError()) {
+      ErrorResponse error = result.getError();
+      String message = error.getFields().get('M');
+      throw new PostgresqlException(message, result);
+    }
+  }
+
+  private void sendDescribeCommon(Describe describeMessage) throws IOException {
+    currentOutBuffer = describeMessage.toBytes();
+    state = ConnectionState.SendingDescribe;
+    if (!nonBlocking) socket.configureBlocking(true);
+    socket.write(currentOutBuffer);
+    if (!nonBlocking) socket.configureBlocking(false);
+    changeState();
+  }
+
+  private void checkIsReady() {
+    if (state != ConnectionState.ReadyForQuery && state != ConnectionState.ExtendedReadyForQuery)
+      throw new IllegalStateException("Connection isn't ready for a new query. State: " + state.name());
+  }
+
+  private ResultSet waitForResult() throws IOException, PostgresqlException {
+    ResultSet prevResult, result;
+    prevResult = result = null;
+    while ((result = getResult()) != null) {
+      prevResult = result;
+    }
+    if (prevResult != null && prevResult.hasError()) {
+      throw new PostgresqlException(prevResult.getError().getFields().get((byte) 'M'), prevResult);
+    }
+    return prevResult;
+  }
 
   private PostgresqlConnection(Properties props) {
     this.host = host(props);
@@ -165,19 +316,18 @@ public class PostgresqlConnection {
 
   private void connect() throws Exception {
     connectAsync();
-    Selector selector = Selector.open();
-    while (status() != ConnectionState.CONNECTION_BAD &&
-        status() != ConnectionState.CONNECTION_OK) {
+    while (state.pollingState() != ConnectionState.PGRES_POLLING_OK) {
+      Selector selector = Selector.open();
       // do connection poll
       ConnectionState pollState = connectPoll();
       if (pollState == ConnectionState.PGRES_POLLING_WRITING) {
         socket.register(selector, SelectionKey.OP_WRITE);
         selector.select();
-      } else {
+      } else if (pollState == ConnectionState.PGRES_POLLING_READING) {
         socket.register(selector, SelectionKey.OP_READ);
         selector.select();
       }
-      selector.keys().clear();
+      selector.close();
     }
   }
 
@@ -190,8 +340,7 @@ public class PostgresqlConnection {
       // send startup message
       socket.configureBlocking(false);
       state = ConnectionState.SendingStartup;
-      currentOutMessage = new Startup(user, dbname, new Properties());
-      currentOutBuffer = currentOutMessage.toBytes();
+      currentOutBuffer = new Startup(user, dbname, new Properties()).toBytes();
       currentInMessage = new ProtocolMessageBuffer();
     } catch (IOException e) {
       state = ConnectionState.Failed;
@@ -199,43 +348,120 @@ public class PostgresqlConnection {
     }
   }
 
-  private void changeState() {
-    System.out.println("remaining: " + currentInMessage.remaining());
-    switch (state) {
-    case SendingStartup:
+  private void changeState() throws IOException {
+    System.out.println("before: " + state.name());
+    if (state.isWrite()) {
       if (currentOutBuffer.remaining() == 0)
-        state = ConnectionState.ReadingAuthentication;
-    case SendingAuthentication:
-      if (currentOutBuffer.remaining() == 0)
-        state = ConnectionState.ReadingAuthenticationResponse;
-      break;
-    case SendingQuery:
-      if (currentOutBuffer.remaining() == 0)
-        state = ConnectionState.ReadingQueryResponse;
-      break;
-    case ReadingAuthentication:
-    case ReadingAuthenticationResponse:
+        state = state.nextState();
+    } else if (state.isRead()) {
       if (currentInMessage.remaining() == 0) {
-        processAuthentication();
+        processMessage();
+        state = state.nextState(currentInMessage.getMessage().getType());
         currentInMessage = new ProtocolMessageBuffer();
       }
+    }
+
+    if (state.isFlush()) {
+      currentOutBuffer = new Flush().toBytes();
+    }
+
+    if (inProgress != null && inProgress.hasError()) {
+      shouldBind = shouldDescribe = shouldExecute = false;
+    }
+
+    if (state == ConnectionState.ExtendedReadyForQuery) {
+      if (extendedQueryIsOver()) {
+        System.out.println("sending sync to finish extended query");
+        currentOutBuffer = new Sync().toBytes();
+        state = ConnectionState.SendingSync;
+      } else {
+        if (shouldBind) {
+          shouldBind = false;
+          sendExecPrepared("", values, format);
+        } else if (shouldDescribe) {
+          shouldDescribe = false;
+          sendDescribePortal("");
+        } else if (shouldExecute) {
+          shouldExecute = false;
+          sendExecutePortal("");
+        }
+      }
+    }
+
+    System.out.println("after: " + state.name());
+  }
+
+  private void processMessage() {
+    if (currentInMessage.getMessage().getType() == MessageType.NoticeResponse) {}
+    if (currentInMessage.getMessage().getType() == MessageType.ParameterStatus) {
+      processParameterStatusAndBackend();
+      return;
+    }
+
+    switch (state) {
+    case ReadingAuthentication:
+    case ReadingAuthenticationResponse:
+      // no special processing needed
       break;
     case ReadingBackendData:
     case ReadingParameterStatus:
-      if (currentInMessage.remaining() == 0) {
-        processParameterStatusAndBackend();
-        currentInMessage = new ProtocolMessageBuffer();
-      }
+      processParameterStatusAndBackend();
+      break;
+    case ReadingParseResponse:
+      processParseResponse();
+      break;
+    case ReadingBindResponse:
+      processBindResponse();
+      break;
+    case ReadingDescribeResponse:
+      processDescribeResponse();
       break;
     case ReadingQueryResponse:
-      if (currentInMessage.remaining() == 0) {
-        processQueryResponse();
-        currentInMessage = new ProtocolMessageBuffer();
-      }
-    default:
-      // don't do anything
+    case ReadingExecuteResponse:
+      processQueryResponse();
+      break;
+    case ReadingReadyForQuery:
+      processSyncReadyForQuery();
       break;
     }
+  }
+
+  private void processSyncReadyForQuery() {
+    if (extendedQueryIsOver()) {
+      lastResultSet = inProgress;
+      inProgress = null;
+    }
+  }
+
+  private void processDescribeResponse() {
+    ProtocolMessage message = currentInMessage.getMessage();
+    if (inProgress == null) inProgress = new ResultSet();
+    switch (message.getType()) {
+    case ErrorResponse:
+      inProgress.setErrorResponse((ErrorResponse) message);
+      break;
+    case RowDescription:
+      inProgress.setDescription((RowDescription) message);
+      break;
+    case ParameterDescription:
+      inProgress.setParameterDescription((ParameterDescription) message);
+      break;
+    }
+  }
+
+  private void processParseResponse() {
+    ProtocolMessage message = currentInMessage.getMessage();
+    if (inProgress == null) inProgress = new ResultSet();
+    switch(message.getType()) {
+    case ErrorResponse:
+      System.out.println("setting error");
+      inProgress.setErrorResponse((ErrorResponse) message);
+      break;
+    }
+  }
+
+  private void processBindResponse() {
+    processParseResponse();	// same logic
   }
 
   private void processQueryResponse() {
@@ -249,7 +475,7 @@ public class PostgresqlConnection {
       inProgress = null;
       break;
     case EmptyQueryResponse:
-      lastResultSet = ResultSet.EMPTY;
+      lastResultSet = new ResultSet();
       inProgress = null;
       break;
     case RowDescription:
@@ -262,16 +488,15 @@ public class PostgresqlConnection {
       DataRow dataRow = (DataRow) message;
       inProgress.appendRow(dataRow);
       break;
-    case NoticeResponse:
-      break;
     case ErrorResponse:
+      inProgress = new ResultSet();
       ErrorResponse error = (ErrorResponse) message;
       inProgress.setErrorResponse(error);
       lastResultSet = inProgress;
       inProgress = null;
       break;
     case ReadyForQuery:
-      state = ConnectionState.ReadyForQuery;
+      transactionStatus = ((ReadyForQuery) message).getTransactionStatus();
       break;
     }
   }
@@ -279,66 +504,21 @@ public class PostgresqlConnection {
   private void processParameterStatusAndBackend() {
     ProtocolMessage message = currentInMessage.getMessage();
     switch(message.getType()) {
-    case ErrorResponse:
-      state = ConnectionState.Failed;
-      break;
     case ParameterStatus:
       ParameterStatus parameterStatus = (ParameterStatus) message;
       parameterValues.put(parameterStatus.getName(), parameterStatus.getValue());
-      System.out.println("current parameter values: " + parameterValues);
       break;
     case BackendKeyData:
       backendKeyData = (BackendKeyData) message;
-      System.out.println("pid: " + backendKeyData.getPid() + ", secret: " + backendKeyData.getSecret());
+      break;
     case ReadyForQuery:
-      state = ConnectionState.ReadyForQuery;
+      transactionStatus = ((ReadyForQuery) message).getTransactionStatus();
       break;
-    default:
-      throw new IllegalArgumentException("Received : " + message.getType().name());
     }
   }
 
-  private void processAuthentication() {
-    ProtocolMessage message = currentInMessage.getMessage();
-    switch (message.getType()) {
-    case ErrorResponse:
-      state = ConnectionState.Failed;
-      break;
-    case AuthenticationOk:
-      state = ConnectionState.ReadingBackendData;
-      break;
-    default:
-      throw new IllegalArgumentException("Received : " + message.getType().name());
-    }
-  }
-
-  private ConnectionState translateStateForPolling() {
-    switch(state) {
-    case SendingStartup:
-    case SendingAuthentication:
-      return ConnectionState.PGRES_POLLING_WRITING;
-    case ReadingAuthentication:
-    case ReadingAuthenticationResponse:
-    case ReadingBackendData:
-    case ReadingParameterStatus:
-      return ConnectionState.PGRES_POLLING_READING;
-    case ReadyForQuery:
-      return ConnectionState.PGRES_POLLING_OK;
-    case Failed:
-      return ConnectionState.PGRES_POLLING_FAILED;
-    default:
-      throw new IllegalStateException("Unkown state: " + state.name());
-    }
-  }
-
-  private ConnectionState translateState() {
-    System.out.println("current state: " + state.name());
-    switch(state) {
-    case Failed:
-      return ConnectionState.CONNECTION_BAD;
-    default:
-      return ConnectionState.CONNECTION_OK;
-    }
+  private boolean extendedQueryIsOver() {
+    return !shouldBind && !shouldDescribe && !shouldExecute;
   }
 
   private final String host;
@@ -347,11 +527,18 @@ public class PostgresqlConnection {
   private final String user;
   private boolean nonBlocking = false;
 
+  private boolean shouldBind = false;
+  private boolean shouldDescribe = false;
+  private boolean shouldExecute = false;
+
+  private Value[] values;
+  private Format format;
+
+  private TransactionStatus transactionStatus;
   private ResultSet inProgress;
   private ResultSet lastResultSet;
   private SocketChannel socket;
   private ConnectionState state = ConnectionState.CONNECTION_BAD;
-  private ProtocolMessage currentOutMessage;
   private ByteBuffer currentOutBuffer;
   private ProtocolMessageBuffer currentInMessage;
   private final Map<String, String> parameterValues = new HashMap<String, String>();

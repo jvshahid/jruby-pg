@@ -3,36 +3,34 @@ package org.jruby.pg.internal.messages;
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 
+import org.jruby.pg.internal.Value;
+
 public class Bind extends ProtocolMessage {
-  private final String destinationPortal;
-  private final String sourceStatement;
-  private final Parameter[] params;
-  private final Format format;
   private final byte[] bytes;
   private final int length;
 
-  public Bind(String destinationPortal, String sourceStatement, Parameter[] params, Format format) {
-    this.destinationPortal = destinationPortal;
-    this.sourceStatement = sourceStatement;
-    this.params = params;
-    this.format = format;
-
+  public Bind(String destinationPortal, String sourceStatement, Value[] params, Format format) {
     ByteArrayOutputStream out = new ByteArrayOutputStream();
     try {
-      out.write('b');
+      out.write('B');
       out.write(new byte[4]);
       ByteUtils.writeString(out, destinationPortal);
       ByteUtils.writeString(out, sourceStatement);
       ByteUtils.writeInt2(out, params.length);
-      for (Parameter parameter : params) {
-        parameter.writeFormat(out);
+      for (Value parameter : params) {
+        ByteUtils.writeInt2(out, parameter.getFormat().getValue());
       }
       ByteUtils.writeInt2(out, params.length);
-      for (Parameter parameter : params) {
-        parameter.writeValue(out);
+      for (Value parameter : params) {
+        if (parameter.getBytes() == null) {
+          ByteUtils.writeInt4(out, -1);
+        } else {
+          ByteUtils.writeInt4(out, parameter.getBytes().length);
+          out.write(parameter.getBytes());
+        }
       }
       ByteUtils.writeInt2(out, 1);
-      out.write(format.getValue());
+      ByteUtils.writeInt2(out, format.getValue());
     } catch (Exception ex) {
       // we cannot be here
     }
@@ -56,21 +54,5 @@ public class Bind extends ProtocolMessage {
   @Override
   public ByteBuffer toBytes() {
     return ByteBuffer.wrap(bytes);
-  }
-
-  public String getDestinationPortal() {
-    return destinationPortal;
-  }
-
-  public String getSourceStatement() {
-    return sourceStatement;
-  }
-
-  public Parameter[] getParams() {
-    return params;
-  }
-
-  public Format getFormat() {
-    return format;
   }
 }

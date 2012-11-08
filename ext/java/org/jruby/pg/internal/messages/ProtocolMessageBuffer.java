@@ -30,8 +30,7 @@ public class ProtocolMessageBuffer {
     if (first5Bytes.remaining() == 0 && rest == null) {
       first5Bytes.flip();
       firstByte = first5Bytes.get();
-      messageSize = first5Bytes.getInt(1);
-      System.out.println("size: " + messageSize);
+      messageSize = first5Bytes.getInt();
       rest = ByteBuffer.allocate(messageSize - 4);
     }
   }
@@ -100,7 +99,7 @@ public class ProtocolMessageBuffer {
         } else {
           ByteBuffer newBuffer = rest.duplicate();
           newBuffer.limit(rest.position() + byteLength);
-          rest.position(newBuffer.limit() + 1);
+          rest.position(newBuffer.limit());
           data[i] = newBuffer;
         }
       }
@@ -110,13 +109,33 @@ public class ProtocolMessageBuffer {
       int secret = rest.getInt();
       return new BackendKeyData(pid, secret);
     case 'E':
+    case 'N':
       byte code;
       Map<Byte, String> fields = new HashMap<Byte, String>();
       while((code = rest.get()) != '\0') {
         ByteBuffer value = ByteUtils.getNullTerminatedBytes(rest);
         fields.put(code, ByteUtils.byteBufferToString(value));
       }
-      return new ErrorResponse(fields, rest.capacity() + 4);
+      if (firstByte == 'E')
+        return new ErrorResponse(fields, rest.capacity() + 4);
+      else
+        return new NoticeResponse(fields, rest.capacity() + 4);
+    case 'C':
+      ByteBuffer buffer = ByteUtils.getNullTerminatedBytes(rest);
+      return new CommandComplete(ByteUtils.byteBufferToString(buffer));
+    case 't':
+      short length = rest.getShort();
+      int [] oids = new int[length];
+      for (int i = 0; i < length; i++)
+        oids[i] = rest.getInt();
+      return new ParameterDescription(oids, rest.capacity());
+    case '1':
+      return new ParseComplete();
+    case '2':
+      return new BindComplete();
+    case 'Z':
+      byte transactionStatus = rest.get();
+      return new ReadyForQuery(TransactionStatus.fromByte(transactionStatus), rest.capacity() + 4);
     default:
       throw new IllegalArgumentException("Cannot translate buffer to message for type '" + ((char) firstByte) + "'");
     }

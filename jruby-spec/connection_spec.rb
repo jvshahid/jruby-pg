@@ -19,20 +19,45 @@ describe PG::Connection do
       @conn = setup_testing_db( "PG_Connection" )
     end
 
+    before( :each ) do
+      @conn.exec( 'BEGIN' ) unless example.metadata[:without_transaction]
+    end
+
+    after( :each ) do
+      @conn.exec( 'ROLLBACK' ) unless example.metadata[:without_transaction]
+    end
+
     after(:all) do
       teardown_testing_db( @conn )
     end
 
     it 'execute successfully' do
-      @conn.prepare 'query', 'SELECT 1 AS n'
-      res = @conn.exec_prepared 'query'
+      @conn.prepare '', 'SELECT 1 AS n'
+      res = @conn.exec_prepared ''
       res[0]['n'].should== '1'
     end
 
     it 'execute successfully with parameters' do
-      @conn.prepare 'query', 'SELECT $1 AS n'
-      res = @conn.exec_prepared 'query', ['foo']
+      @conn.prepare '', 'SELECT $1::text AS n'
+      res = @conn.exec_prepared '', ['foo']
       res[0]['n'].should== 'foo'
+    end
+
+    it 'should return an error if a prepared statement is used more than once' do
+      expect {
+        @conn.prepare 'foo', 'SELECT $1::text AS n'
+        @conn.prepare 'foo', 'SELECT $1::text AS n'
+      }.should raise_error(PGError, /already exists/i)
+    end
+    it 'return an error if a parameter is not bound to a type' do
+      expect {
+        @conn.prepare 'bar', 'SELECT $1 AS n'
+      }.should raise_error(PGError, /could not determine/i)
+    end
+    it 'return an error if a prepared statement does not exist' do
+      expect {
+        @conn.exec_prepared 'foobar'
+      }.to raise_error(PGError, /does not exist/i)
     end
   end
 end

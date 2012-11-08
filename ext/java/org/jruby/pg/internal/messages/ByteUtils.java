@@ -25,10 +25,11 @@ public class ByteUtils {
     ByteBuffer newBuffer = buffer.duplicate();
     byte[] bytes = newBuffer.array();
     int i;
-    for (i = offset; i < newBuffer.limit(); i++)
+    int position = buffer.position() + buffer.arrayOffset() + offset;
+    for (i = position; i < newBuffer.limit(); i++)
       if (bytes[i] == '\0')
         break;
-    newBuffer.position(offset);
+    newBuffer.position(position - buffer.arrayOffset());
     newBuffer.limit(i);
     buffer.position(i + 1);	// skip the null byte
     return newBuffer;
@@ -45,10 +46,11 @@ public class ByteUtils {
   }
 
   public static void fixLength(byte[] bytes, int offset) {
-    bytes[offset]     = (byte) (bytes.length >> 24);
-    bytes[offset + 1] = (byte) (bytes.length >> 16);
-    bytes[offset + 2] = (byte) (bytes.length >> 8);
-    bytes[offset + 3] = (byte) (bytes.length);
+    int length = bytes.length - offset;
+    bytes[offset]     = (byte) (length >> 24);
+    bytes[offset + 1] = (byte) (length >> 16);
+    bytes[offset + 2] = (byte) (length >> 8);
+    bytes[offset + 3] = (byte) (length);
   }
 
   public static void writeString(OutputStream out, String name) throws IOException {

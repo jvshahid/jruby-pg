@@ -1,35 +1,36 @@
 package org.jruby.pg;
 
-import java.sql.ResultSet;
-import java.sql.ResultSetMetaData;
-import java.sql.SQLException;
-import java.sql.Types;
+import java.nio.ByteBuffer;
+import java.util.List;
 
 import org.jcodings.Encoding;
 import org.jruby.Ruby;
 import org.jruby.RubyArray;
 import org.jruby.RubyClass;
-import org.jruby.RubyEncoding;
 import org.jruby.RubyFixnum;
 import org.jruby.RubyHash;
 import org.jruby.RubyModule;
 import org.jruby.RubyObject;
 import org.jruby.RubyString;
 import org.jruby.anno.JRubyMethod;
+import org.jruby.pg.internal.ResultSet;
+import org.jruby.pg.internal.messages.Column;
+import org.jruby.pg.internal.messages.DataRow;
+import org.jruby.pg.internal.messages.ErrorResponse;
+import org.jruby.pg.internal.messages.RowDescription;
 import org.jruby.runtime.Block;
 import org.jruby.runtime.ObjectAllocator;
 import org.jruby.runtime.ThreadContext;
 import org.jruby.runtime.builtin.IRubyObject;
 import org.jruby.util.ByteList;
-import org.postgresql.core.BaseConnection;
 
 public class Result extends RubyObject {
     protected final ResultSet jdbcResultSet;
     protected final Encoding encoding;
     protected final boolean binary; // return results in binary format
-    private final BaseConnection connection;
+    private final Connection connection;
 
-    public Result(Ruby ruby, RubyClass rubyClass, BaseConnection connection, ResultSet resultSet, Encoding encoding, boolean binary) {
+    public Result(Ruby ruby, RubyClass rubyClass, Connection connection, ResultSet resultSet, Encoding encoding, boolean binary) {
         super(ruby, rubyClass);
         this.connection = connection;
 
@@ -68,7 +69,13 @@ public class Result extends RubyObject {
 
     @JRubyMethod(name = {"error_field", "result_error_field"})
     public IRubyObject error_field(ThreadContext context, IRubyObject arg0) {
+      byte errorCode = (byte) ((RubyFixnum) arg0).getLongValue();
+      ErrorResponse error = jdbcResultSet.getError();
+      if (error == null)
         return context.nil;
+      System.out.println("fields: " + error.getFields() + ", field: " + (char) errorCode);
+      String field = error.getFields().get(errorCode);
+      return field == null ? context.nil : context.runtime.newString(field);
     }
 
     @JRubyMethod
@@ -83,26 +90,12 @@ public class Result extends RubyObject {
 
     @JRubyMethod(name = {"ntuples", "num_tuples"})
     public IRubyObject ntuples(ThreadContext context) {
-      // FIXME: this may not be the best way to count the result set, but I don't
-      // know of any other way
-      try {
-        int curr = jdbcResultSet.getRow();
-        jdbcResultSet.last();
-        int count = jdbcResultSet.getRow();
-        jdbcResultSet.absolute(curr);
-        return new RubyFixnum(context.runtime, count);
-      } catch (SQLException e) {
-        throw context.runtime.newRuntimeError(e.getLocalizedMessage());
-      }
+      return context.runtime.newFixnum(jdbcResultSet.getRows().size());
     }
 
     @JRubyMethod(name = {"nfields", "num_fields"})
     public IRubyObject nfields(ThreadContext context) {
-      try {
-        return context.runtime.newFixnum(jdbcResultSet.getMetaData().getColumnCount());
-      } catch (SQLException e) {
-        throw Connection.newPgError(context, e.getLocalizedMessage(), encoding);
-      }
+      return context.runtime.newFixnum(jdbcResultSet.getDescription().getColumns().length);
     }
 
     @JRubyMethod
@@ -127,24 +120,30 @@ public class Result extends RubyObject {
 
     @JRubyMethod
     public IRubyObject fformat(ThreadContext context, IRubyObject arg0) {
-        return context.nil;
+      int index = (int) ((RubyFixnum) arg0).getLongValue();
+      Column[] columns = jdbcResultSet.getDescription().getColumns();
+      if (index >= columns.length || index < 0)
+        throw context.runtime.newArgumentError("column number " + index + " is out of range");
+      return context.runtime.newFixnum(columns[index].getFormat());
     }
 
     @JRubyMethod(required = 1, argTypes = {RubyFixnum.class})
     public IRubyObject ftype(ThreadContext context, IRubyObject fieldNumber) {
-      try {
-        int index = (int) ((RubyFixnum) fieldNumber).getLongValue();
-        String type = jdbcResultSet.getMetaData().getColumnTypeName(index);
-        int pgType = connection.getTypeInfo().getPGType(type);
-        return context.runtime.newFixnum(pgType);
-      } catch (SQLException e) {
-        throw Connection.newPgError(context, e.getLocalizedMessage(), encoding);
+      RowDescription description = jdbcResultSet.getDescription();
+      int field = (int) ((RubyFixnum) fieldNumber).getLongValue();
+      if (field >= description.getColumns().length) {
+        throw context.runtime.newIndexError("field " + field + " is out of range");
       }
+      return context.runtime.newFixnum(description.getColumns()[field].getOid());
     }
 
     @JRubyMethod
     public IRubyObject fmod(ThreadContext context, IRubyObject arg0) {
-        return context.nil;
+      Column[] columns = jdbcResultSet.getDescription().getColumns();
+      int index = (int) ((RubyFixnum) arg0).getLongValue();
+      if (index < 0 || index >= columns.length)
+        throw context.runtime.newArgumentError("column number " + index + " is out of range");
+      return context.runtime.newFixnum(columns[index].getTypmod());
     }
 
     @JRubyMethod
@@ -154,16 +153,21 @@ public class Result extends RubyObject {
 
     @JRubyMethod(required = 2, argTypes = {RubyFixnum.class, RubyFixnum.class})
     public IRubyObject getvalue(ThreadContext context, IRubyObject _row, IRubyObject _column) {
-      int row = (int) ((RubyFixnum) _row).getLongValue() + 1;
-      int column = (int) ((RubyFixnum) _column).getLongValue() + 1;
+      int row = (int) ((RubyFixnum) _row).getLongValue();
+      int column = (int) ((RubyFixnum) _column).getLongValue();
 
-      try {
-        jdbcResultSet.absolute(row);
-        IRubyObject value = getObjectAsString(context, column);
-        return value;
-      } catch (SQLException e) {
-        throw Connection.newPgError(context, e.getLocalizedMessage(), encoding);
+      List<DataRow> rows = jdbcResultSet.getRows();
+      if (row >= rows.size()) {
+        throw context.runtime.newIndexError("row " + row + " is out of range");
       }
+      DataRow dataRow = rows.get(row);
+      ByteBuffer[] columns = dataRow.getValues();
+      if (column >= columns.length) {
+        throw context.runtime.newIndexError("column " + column + " is out of range");
+      }
+      ByteBuffer buffer = columns[column];
+      byte[] bytes = buffer.array();
+      return context.runtime.newString(new ByteList(bytes, buffer.arrayOffset() + buffer.position(), buffer.remaining()));
     }
 
     @JRubyMethod
@@ -181,9 +185,15 @@ public class Result extends RubyObject {
         return context.nil;
     }
 
-    @JRubyMethod
+    @JRubyMethod(required = 1)
     public IRubyObject paramtype(ThreadContext context, IRubyObject arg0) {
-        return context.nil;
+      int index = (int) ((RubyFixnum) arg0).getLongValue();
+      if (jdbcResultSet.getParameterDescription() == null)
+        throw connection.newPgError(context, "Parameter desciption not available", null, encoding);
+      int[] oids = jdbcResultSet.getParameterDescription().getOids();
+      if (index >= oids.length)
+        throw context.runtime.newIndexError("index " + index + " is out of range");
+      return context.runtime.newFixnum(oids[index]);
     }
 
     @JRubyMethod
@@ -205,46 +215,24 @@ public class Result extends RubyObject {
 
     @JRubyMethod
     public IRubyObject values(ThreadContext context) {
+      int len = jdbcResultSet.getRows().size();
       RubyArray array = context.runtime.newArray();
-
-      try {
-        jdbcResultSet.beforeFirst();
-
-        while(jdbcResultSet.next()) {
-          array.append(currentRowToArray(context));
-        }
-
-        return array;
-      } catch (SQLException e) {
-        throw Connection.newPgError(context, e.getLocalizedMessage(), encoding);
-      }
+      for (int i = 0; i < len; i++)
+        array.append(rowToArray(context, i));
+      return array;
     }
 
-    @JRubyMethod(name = "[]")
-    public IRubyObject op_aref(ThreadContext context, IRubyObject arg0) {
-      Ruby runtime = context.runtime;
-      int index = (int)arg0.convertToInteger().getLongValue() + 1;
-
-      try {
-        boolean success = jdbcResultSet.absolute(index);
-        if (!success) throw context.runtime.newIndexError("Invalid column number " + index);
-        return currentRowToHash(context);
-      } catch (Exception e) {
-          throw runtime.newRuntimeError(e.getLocalizedMessage());
-      }
+    @JRubyMethod(name = "[]", required = 1)
+    public IRubyObject op_aref(ThreadContext context, IRubyObject row) {
+      int index = (int) ((RubyFixnum) row).getLongValue();
+      return rowToHash(context, index);
     }
 
     @JRubyMethod
     public IRubyObject each(ThreadContext context, Block block) {
-      try {
-        jdbcResultSet.beforeFirst();
-        while (jdbcResultSet.next()) {
-            block.yieldSpecific(context, currentRowToHash(context));
-        }
-      } catch (Exception e) {
-          throw context.runtime.newRuntimeError(e.getLocalizedMessage());
-      }
-      return this;
+      for (int i = 0; i < jdbcResultSet.getRows().size(); i++)
+        block.yield(context, rowToHash(context, i));
+      return context.nil;
     }
 
     @JRubyMethod
@@ -254,109 +242,71 @@ public class Result extends RubyObject {
 
     @JRubyMethod(required = 1, argTypes = {RubyFixnum.class})
     public IRubyObject column_values(ThreadContext context, IRubyObject index) {
-      if (!(index instanceof RubyFixnum))
-        throw context.runtime.newTypeError("argument must be a FixNum");
-
-      RubyArray array = context.runtime.newArray();
-      int columnIndex = (int) ((RubyFixnum) index).getLongValue() + 1;
-
-      try {
-        jdbcResultSet.beforeFirst();
-        while (jdbcResultSet.next()) {
-          IRubyObject value = getObjectAsString(context, columnIndex);
-          array.append(value);
-        }
-        return array;
-      } catch (SQLException e) {
-        if (e.getLocalizedMessage().contains("The column index"))
-          throw context.runtime.newIndexError(e.getLocalizedMessage());
-        else
-          throw context.runtime.newRuntimeError(e.getLocalizedMessage());
+      List<DataRow> rows = jdbcResultSet.getRows();
+      int column = (int) ((RubyFixnum) index).getLongValue();
+      if (rows.size() > 0 && column >= rows.get(0).getValues().length) {
+        throw context.runtime.newIndexError("column " + column + " is out of range");
       }
+      RubyArray array = context.runtime.newArray();
+      for (int i = 0; i < rows.size(); i++) {
+        array.append(valueAsString(context, i, column));
+      }
+      return array;
     }
 
     @JRubyMethod(required = 1, argTypes = {RubyString.class})
     public IRubyObject field_values(ThreadContext context, IRubyObject name) {
-      if (!(name instanceof RubyString))
-        throw context.runtime.newTypeError("name must be a string");
-
-      RubyArray array = context.runtime.newArray();
       String fieldName = ((RubyString) name).asJavaString();
-
-      try {
-        jdbcResultSet.beforeFirst();
-        while (jdbcResultSet.next()) {
-          IRubyObject value = getObjectAsString(context, fieldName);
-          array.append(value);
+      Column[] columns = jdbcResultSet.getDescription().getColumns();
+      for (int j = 0; j < columns.length; j++) {
+        if (columns[j].getName().equals(fieldName)) {
+          RubyArray array = context.runtime.newArray();
+          for (int i = 0; i < jdbcResultSet.getRows().size(); i++)
+            array.append(valueAsString(context, i, j));
+          return array;
         }
-        return array;
-      } catch (SQLException e) {
-        if (e.getLocalizedMessage().contains("The column name"))
-          throw context.runtime.newIndexError(e.getLocalizedMessage());
-        else
-          throw context.runtime.newRuntimeError(e.getLocalizedMessage());
       }
+      throw context.runtime.newIndexError("Unknown column " + fieldName);
     }
 
-    private RubyArray currentRowToArray(ThreadContext context) throws SQLException {
-      ResultSetMetaData metaData = jdbcResultSet.getMetaData();
+    private RubyArray rowToArray(ThreadContext context, int rowIndex) {
+      List<DataRow> rows = jdbcResultSet.getRows();
+      if (rowIndex >= rows.size())
+        throw context.runtime.newIndexError("row " + rowIndex);
 
       RubyArray array = context.runtime.newArray();
 
-      for (int i = 1; i <= metaData.getColumnCount(); i++) {
-        array.append(getObjectAsString(context, i));
+      for (int i = 0; i < rows.get(rowIndex).getValues().length; i++) {
+        IRubyObject value = valueAsString(context, rowIndex, i);
+        array.append(value);
       }
-
       return array;
     }
 
-    private RubyHash currentRowToHash(ThreadContext context) throws SQLException {
-        ResultSetMetaData metaData = jdbcResultSet.getMetaData();
+    private RubyHash rowToHash(ThreadContext context, int rowIndex) {
+      List<DataRow> rows = jdbcResultSet.getRows();
+      Column[] columns = jdbcResultSet.getDescription().getColumns();
+      if (rowIndex < 0 || rowIndex >= rows.size())
+        throw context.runtime.newIndexError("row " + rowIndex + " is out of range");
 
-        RubyHash hash = RubyHash.newHash(context.runtime);
+      RubyHash hash = new RubyHash(context.runtime);
 
-        for (int i = 1; i <= metaData.getColumnCount(); i++) {
-            hash.put(metaData.getColumnName(i), getObjectAsString(context, i));
-        }
-
-        return hash;
+      for (int i = 0; i < rows.get(rowIndex).getValues().length; i++) {
+        IRubyObject name = context.runtime.newString(columns[i].getName());
+        IRubyObject value = valueAsString(context, rowIndex, i);
+        hash.op_aset(context, name, value);
+      }
+      return hash;
     }
 
-    private IRubyObject getObjectAsString(ThreadContext context, int fieldNumber) throws SQLException {
-      switch (jdbcResultSet.getMetaData().getColumnType(fieldNumber)) {
-      case Types.BINARY:
-      case Types.BLOB:
-        byte[] bytes = jdbcResultSet.getBytes(fieldNumber);
-        RubyString string;
-        if (bytes != null) {
-          string = context.runtime.newString(new ByteList(bytes));
-          // FIXME: we always get the results in binary format, what if
-          // the user specify text format, should we escape the string ?
-          return string;
-        }
-        // fall through if this column is null
-      case Types.NULL:
-        return context.nil;
-      default:
-        break;
-      }
-      Object object = jdbcResultSet.getObject(fieldNumber);
-      if (object == null) {
+    private IRubyObject valueAsString(ThreadContext context, int row, int column) {
+      ByteBuffer[] values = jdbcResultSet.getRows().get(row).getValues();
+      if (values[column] == null) {
         return context.nil;
       }
-      RubyString value = context.runtime.newString(object.toString());
-      if (encoding == null)
-        return value;
-
-      return value.encode(context, RubyEncoding.newEncoding(context.runtime, encoding));
-    }
-
-    private IRubyObject getObjectAsString(ThreadContext context, String fieldName) throws SQLException {
-      ResultSetMetaData metaData = jdbcResultSet.getMetaData();
-      int columns = metaData.getColumnCount();
-      for (int i = 1; i <= columns; i++)
-        if (metaData.getColumnName(i).equals(fieldName))
-          return getObjectAsString(context, i);
-      throw context.runtime.newIndexError("Invalid field name");
+      byte[] bytes = values[column].array();
+      int index = values[column].arrayOffset() + values[column].position();
+      int len = values[column].remaining();
+      return context.runtime.newString(new ByteList(bytes, index, len));
     }
 }

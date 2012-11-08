@@ -66,6 +66,7 @@ task :'sync-files' => 'get-ruby-pg-specs'
 
 Rake::Task[:spec].prerequisites << 'sync-files'
 Rake::Task[:spec].prerequisites << :compile
+Rake::Task[:spec].prerequisites << :java_debug
 
 # sync specs from jruby-spec to spec/jruby
 target_dir = 'spec/jruby'
@@ -79,4 +80,7 @@ Dir.glob('jruby-spec/*.rb').each do |f|
   Rake::Task[:'sync-files'].prerequisites << t
 end
 
+task :java_debug do
+  ENV['JAVA_OPTS'] = '-Xdebug -Xrunjdwp:transport=dt_socket,address=8080,server=y,suspend=y' if ENV['JAVA_DEBUG']
+end
 # vim: syntax=ruby

@@ -8,6 +8,10 @@ import org.jruby.RubyFixnum;
 import org.jruby.RubyModule;
 import org.jruby.anno.JRubyMethod;
 import org.jruby.pg.internal.ConnectionState;
+import org.jruby.pg.internal.ResultSet.ResultStatus;
+import org.jruby.pg.internal.messages.ErrorResponse;
+import org.jruby.pg.internal.messages.ErrorResponse.ErrorField;
+import org.jruby.pg.internal.messages.TransactionStatus;
 import org.jruby.runtime.ThreadContext;
 import org.jruby.runtime.builtin.IRubyObject;
 import org.jruby.runtime.load.Library;
@@ -24,7 +28,13 @@ public class Postgresql implements Library {
 
         // create the connection status constants
         for(ConnectionState status : ConnectionState.values())
-          pg.defineConstant(status.name(), new RubyFixnum(ruby, status.ordinal()));
+          pg.defineConstant(status.name(), ruby.newFixnum(status.ordinal()));
+
+        for (TransactionStatus status: TransactionStatus.values())
+          pg.defineConstant(status.name(), ruby.newFixnum(status.ordinal()));
+
+        for (ResultStatus status : ResultStatus.values())
+          pg.defineConstant(status.name(), ruby.newFixnum(status.ordinal()));
 
         // create the large object constants
         pg.defineConstant("INV_READ", new RubyFixnum(ruby, LargeObjectManager.READ));
@@ -32,6 +42,10 @@ public class Postgresql implements Library {
         pg.defineConstant("SEEK_SET", new RubyFixnum(ruby, LargeObject.SEEK_SET));
         pg.defineConstant("SEEK_END", new RubyFixnum(ruby, LargeObject.SEEK_END));
         pg.defineConstant("SEEK_CUR", new RubyFixnum(ruby, LargeObject.SEEK_CUR));
+
+        // create error fields objects
+        for (ErrorField field : ErrorResponse.ErrorField.values())
+          pg.defineConstant(field.name(), ruby.newFixnum(field.getCode()));
 
         pg.getSingletonClass().defineAnnotatedMethods(Postgresql.class);
 
