@@ -86,21 +86,29 @@ public class PostgresqlConnection {
   }
 
   public ResultSet exec(String query) throws IOException, PostgresqlException {
+    // ignore any prior results
+    getLastResult();
     sendQuery(query);
     return getLastResultThrowError();
   }
 
   public ResultSet execQueryParams(String query, Value[] values, Format format, int [] oids) throws IOException, PostgresqlException {
+    // ignore any prior results
+    getLastResult();
     sendQueryParams(query, values, format, oids);
     return getLastResultThrowError();
   }
 
   public ResultSet execPrepared(String name, Value[] values, Format format) throws IOException, PostgresqlException {
+    // ignore any prior results
+    getLastResult();
     sendExecPrepared(name, values, format);
     return getLastResultThrowError();
   }
 
   public ResultSet prepare(String name, String query, int [] oids) throws IOException, PostgresqlException {
+    // ignore any prior results
+    getLastResult();
     sendPrepareQuery(name, query, oids);
     return getLastResultThrowError();
   }
