@@ -4,6 +4,8 @@ require 'pg'
 
 describe PG::Connection do
   it 'assumes standard conforming strings is off before any connection is created' do
+    # make sure that there are no last connections cached
+    PG::Connection.reset_last_conn
     foo = "\x00"
     PG::Connection.escape_bytea(foo).should== "\\\\000"
     @conn = setup_testing_db( "PG_Connection" )

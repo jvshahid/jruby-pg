@@ -173,6 +173,12 @@ public class Connection extends RubyObject {
       }
     }
 
+    @JRubyMethod(meta = true)
+    public static IRubyObject reset_last_conn(ThreadContext context, IRubyObject self) {
+      LAST_CONNECTION = null;
+      return context.nil;
+    }
+
     @JRubyMethod(rest = true, meta = true)
     public static IRubyObject ping(ThreadContext context, IRubyObject self, IRubyObject[] args) {
         return context.nil;
