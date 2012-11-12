@@ -274,12 +274,13 @@ public class PostgresqlConnection {
 
   public int getServerVersion() {
     String value = parameterValues.get("server_version");
+    System.out.println("server version: " + value);
     if (value == null)
       return 0;
     String[] parts = value.split("\\.");
     int version = 0;
     for (int i = 0; i < parts.length; i++)
-      version = version * 100 + i;
+      version = version * 100 + Integer.parseInt(parts[i]);
     return version;
   }
 

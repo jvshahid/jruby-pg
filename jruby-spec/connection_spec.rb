@@ -105,6 +105,10 @@ describe PG::Connection do
       (finish - start).should be_within( 0.05 ).of( 0.1 )
     end
 
+    it 'correctly translates the server version' do
+      @conn.server_version.should >=(80200)
+    end
+
     it "correctly finishes COPY queries passed to #async_exec" # do
     # 	@conn.async_exec( "COPY (SELECT 1 UNION ALL SELECT 2) TO STDOUT" )
 
