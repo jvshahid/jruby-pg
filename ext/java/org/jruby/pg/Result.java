@@ -17,6 +17,7 @@ import org.jruby.pg.internal.ResultSet;
 import org.jruby.pg.internal.messages.Column;
 import org.jruby.pg.internal.messages.DataRow;
 import org.jruby.pg.internal.messages.ErrorResponse;
+import org.jruby.pg.internal.messages.Format;
 import org.jruby.pg.internal.messages.RowDescription;
 import org.jruby.runtime.Block;
 import org.jruby.runtime.ObjectAllocator;
@@ -85,7 +86,9 @@ public class Result extends RubyObject {
 
     @JRubyMethod(name = {"check", "check_result"})
     public IRubyObject check(ThreadContext context) {
-        return context.nil;
+      if (jdbcResultSet.hasError())
+        throw connection.newPgError(context, jdbcResultSet.getError().getErrorMesssage(), null, encoding);
+      return context.nil;
     }
 
     @JRubyMethod(name = {"ntuples", "num_tuples"})
@@ -108,14 +111,26 @@ public class Result extends RubyObject {
         return context.nil;
     }
 
-    @JRubyMethod
-    public IRubyObject ftable(ThreadContext context, IRubyObject arg0) {
-        return context.nil;
+    @JRubyMethod(required = 1)
+    public IRubyObject ftable(ThreadContext context, IRubyObject _columnIndex) {
+      int columnIndex = (int) ((RubyFixnum) _columnIndex).getLongValue();
+      Column[] columns = jdbcResultSet.getDescription().getColumns();
+      if (columnIndex >= columns.length || columnIndex < 0)
+        throw context.runtime.newArgumentError("column " + columnIndex + " is out of range");
+
+      int oid = columns[columnIndex].getTableOid();
+      return context.runtime.newFixnum(oid);
     }
 
-    @JRubyMethod
-    public IRubyObject ftablecol(ThreadContext context, IRubyObject arg0) {
-        return context.nil;
+    @JRubyMethod(required = 1)
+    public IRubyObject ftablecol(ThreadContext context, IRubyObject _columnIndex) {
+      int columnIndex = (int) ((RubyFixnum) _columnIndex).getLongValue();
+      Column[] columns = jdbcResultSet.getDescription().getColumns();
+      if (columnIndex >= columns.length || columnIndex < 0)
+        throw context.runtime.newArgumentError("column " + columnIndex + " is out of range");
+
+      int tableIndex = columns[columnIndex].getTableIndex();
+      return context.runtime.newFixnum(tableIndex);
     }
 
     @JRubyMethod
@@ -242,8 +257,12 @@ public class Result extends RubyObject {
 
     @JRubyMethod(required = 1, argTypes = {RubyFixnum.class})
     public IRubyObject column_values(ThreadContext context, IRubyObject index) {
-      List<DataRow> rows = jdbcResultSet.getRows();
+      if (!(index instanceof RubyFixnum))
+        throw context.runtime.newTypeError("argument should be a Fixnum");
+
       int column = (int) ((RubyFixnum) index).getLongValue();
+
+      List<DataRow> rows = jdbcResultSet.getRows();
       if (rows.size() > 0 && column >= rows.get(0).getValues().length) {
         throw context.runtime.newIndexError("column " + column + " is out of range");
       }
@@ -307,6 +326,15 @@ public class Result extends RubyObject {
       byte[] bytes = values[column].array();
       int index = values[column].arrayOffset() + values[column].position();
       int len = values[column].remaining();
-      return context.runtime.newString(new ByteList(bytes, index, len));
+
+      if (isBinary(column))
+        return context.runtime.newString(new ByteList(bytes, index, len));
+      else
+        return context.runtime.newString(new ByteList(bytes, index, len, encoding, false));
+    }
+
+    private boolean isBinary(int column) {
+      int format = jdbcResultSet.getDescription().getColumns()[column].getFormat();
+      return Format.isBinary(format);
     }
 }

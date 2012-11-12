@@ -19,9 +19,11 @@ import org.jruby.RubyClass;
 import org.jruby.RubyEncoding;
 import org.jruby.RubyException;
 import org.jruby.RubyFixnum;
+import org.jruby.RubyFloat;
 import org.jruby.RubyHash;
 import org.jruby.RubyIO;
 import org.jruby.RubyModule;
+import org.jruby.RubyNumeric;
 import org.jruby.RubyObject;
 import org.jruby.RubyString;
 import org.jruby.RubySymbol;
@@ -357,6 +359,8 @@ public class Connection extends RubyObject {
     @JRubyMethod(name = {"finish", "close"})
     public IRubyObject finish(ThreadContext context) {
       try {
+        if (postgresqlConnection.closed())
+          throw newPgError(context, "connection is closed", null, encoding);
         postgresqlConnection.close();
         return context.nil;
       } catch (Exception e) {
@@ -364,10 +368,10 @@ public class Connection extends RubyObject {
       }
     }
 
-  @JRubyMethod
-  public IRubyObject status(ThreadContext context) {
-    return context.runtime.newFixnum(postgresqlConnection.status().ordinal());
-  }
+    @JRubyMethod
+    public IRubyObject status(ThreadContext context) {
+      return context.runtime.newFixnum(postgresqlConnection.status().ordinal());
+    }
 
     @JRubyMethod(name = "finished?")
     public IRubyObject finished_p(ThreadContext context) {
@@ -486,7 +490,7 @@ public class Connection extends RubyObject {
         String query = args[0].convertToString().toString();
         ResultSet set = null;
         try {
-            if (args.length == 1 || ((RubyArray) args[1]).getLength() == 0) {
+            if (args.length == 1) {
               set = postgresqlConnection.exec(query);
             } else {
 
@@ -650,7 +654,7 @@ public class Connection extends RubyObject {
       byte[] bytes = str.getBytes();
       int i;
       for (i = 0; i < bytes.length && bytes[i] != '\0'; i++);
-      return escapeBytes(context, bytes, 0, i, rubyEncoding, connection.getStandardConformingStrings());
+      return escapeBytes(context, bytes, 0, i, rubyEncoding, postgresqlConnection.getStandardConformingStrings());
     }
 
     @JRubyMethod
@@ -704,10 +708,10 @@ public class Connection extends RubyObject {
     }
 
     @JRubyMethod
-    public IRubyObject get_result(ThreadContext context) {
+    public IRubyObject get_result(ThreadContext context, Block block) {
       try {
         ResultSet set = postgresqlConnection.getResult();
-        return createResult(context, set, NULL_ARRAY, Block.NULL_BLOCK);
+        return createResult(context, set, NULL_ARRAY, block);
       } catch (Exception e) {
         throw newPgError(context, e.getLocalizedMessage(), null, encoding);
       }
@@ -835,9 +839,20 @@ public class Connection extends RubyObject {
       return context.nil;
     }
 
-    @JRubyMethod(rest = true)
+    @JRubyMethod(optional = 1)
     public IRubyObject block(ThreadContext context, IRubyObject[] args) {
+      try {
+        if (args.length == 0)
+          postgresqlConnection.block();
+        else {
+          RubyFloat timeout = ((RubyNumeric) args[0]).convertToFloat();
+          int timeoutMs = (int) (timeout.getDoubleValue() * 1000);
+          postgresqlConnection.block(timeoutMs);
+        }
         return context.nil;
+      } catch (Exception e) {
+        throw newPgError(context, e.getLocalizedMessage(), null, encoding);
+      }
     }
 
     @JRubyMethod(name = {"wait_for_notify", "notifies_wait"}, rest = true)
@@ -852,7 +867,12 @@ public class Connection extends RubyObject {
 
     @JRubyMethod
     public IRubyObject get_last_result(ThreadContext context) {
-        return context.nil;
+      try {
+        ResultSet set = postgresqlConnection.getLastResult();
+        return createResult(context, set, NULL_ARRAY, Block.NULL_BLOCK);
+      } catch (Exception e) {
+        throw newPgError(context, e.getLocalizedMessage(), null, encoding);
+      }
     }
 
     /******     PG::Connection INSTANCE METHODS: Large Object Support     ******/

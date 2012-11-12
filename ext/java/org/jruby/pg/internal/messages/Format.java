@@ -13,4 +13,8 @@ public enum Format {
       throw new IllegalArgumentException("unkonwn format: " + name());
     }
   }
+
+  public static boolean isBinary(int format) {
+    return format == 1;
+  }
 }

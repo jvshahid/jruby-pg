@@ -83,7 +83,6 @@ public enum ConnectionState {
       case ReadingDescribeResponse:
       case ReadingExecuteResponse:
       case ReadingBindResponse:
-        System.out.println("Received an error sending sync");
         return ExtendedReadyForQuery;
       case ReadingAuthentication:
       case ReadingAuthenticationResponse:
@@ -91,7 +90,7 @@ public enum ConnectionState {
       case ReadingParameterStatus:
         return Failed;
       case ReadingQueryResponse:
-        return ReadyForQuery;
+        return this;
       }
     }
 

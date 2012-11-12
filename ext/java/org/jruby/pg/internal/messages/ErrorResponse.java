@@ -37,6 +37,11 @@ public class ErrorResponse extends BackendMessage {
     this.length = length;
   }
 
+  public String getErrorMesssage() {
+    byte code = ErrorField.PG_DIAG_MESSAGE_PRIMARY.getCode();
+    return fields.get(code);
+  }
+
   @Override
   public int getLength() {
     return length;

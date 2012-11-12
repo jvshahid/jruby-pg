@@ -59,6 +59,8 @@ public class Postgresql implements Library {
           ruby.newRuntimeError(e.getLocalizedMessage());
         }
 
+        pg.defineConstant("INVALID_OID", ruby.newFixnum(Oid.UNSPECIFIED));
+
         Connection.define(ruby, pg, pgConstants);
         Result.define(ruby, pg, pgConstants);
     }

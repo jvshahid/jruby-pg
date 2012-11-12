@@ -12,7 +12,7 @@ public class PostgresqlConnectionUtils {
   }
 
   public static int port(Properties prop) {
-    return Integer.parseInt(prop.getProperty("port"));
+    return Integer.parseInt(prop.getProperty("port", "54321"));
   }
 
   public static String host(Properties prop) {

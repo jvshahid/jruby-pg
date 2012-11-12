@@ -16,10 +16,12 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Properties;
 
+import org.jruby.RubyProcess.Sys;
 import org.jruby.pg.internal.messages.BackendKeyData;
 import org.jruby.pg.internal.messages.Bind;
 import org.jruby.pg.internal.messages.CancelRequest;
 import org.jruby.pg.internal.messages.Close.StatementType;
+import org.jruby.pg.internal.messages.ErrorResponse.ErrorField;
 import org.jruby.pg.internal.messages.DataRow;
 import org.jruby.pg.internal.messages.Describe;
 import org.jruby.pg.internal.messages.ErrorResponse;
@@ -85,32 +87,32 @@ public class PostgresqlConnection {
 
   public ResultSet exec(String query) throws IOException, PostgresqlException {
     sendQuery(query);
-    return waitForResult();
+    return getLastResultThrowError();
   }
 
   public ResultSet execQueryParams(String query, Value[] values, Format format, int [] oids) throws IOException, PostgresqlException {
     sendQueryParams(query, values, format, oids);
-    return waitForResult();
+    return getLastResultThrowError();
   }
 
   public ResultSet execPrepared(String name, Value[] values, Format format) throws IOException, PostgresqlException {
     sendExecPrepared(name, values, format);
-    return waitForResult();
+    return getLastResultThrowError();
   }
 
   public ResultSet prepare(String name, String query, int [] oids) throws IOException, PostgresqlException {
     sendPrepareQuery(name, query, oids);
-    return waitForResult();
+    return getLastResultThrowError();
   }
 
   public ResultSet describePrepared(String name) throws IOException, PostgresqlException {
     sendDescribePrepared(name);
-    return waitForResult();
+    return getLastResultThrowError();
   }
 
   public ResultSet describePortal(String name) throws IOException, PostgresqlException {
     sendDescribePortal(name);
-    return waitForResult();
+    return getLastResultThrowError();
   }
 
   public void sendQueryParams(String query, Value[] values, Format format, int [] oids) throws IOException {
@@ -215,22 +217,44 @@ public class PostgresqlConnection {
     return false;
   }
 
-  public ResultSet getResult() throws IOException {
-    if (!isBusy()) {
-      ResultSet temp = lastResultSet;
-      lastResultSet = null;
-      return temp;
+  public ResultSet getLastResult() throws IOException {
+    ResultSet prevResult, result;
+    prevResult = result = null;
+    while ((result = getResult()) != null) {
+      prevResult = result;
     }
+    return prevResult;
+  }
 
-    while(isBusy()) {
+  public ResultSet getResult() throws IOException {
+    block();
+    ResultSet temp = lastResultSet;
+    lastResultSet = null;
+    return temp;
+  }
+
+  public boolean block() throws IOException {
+    return block(0);
+  }
+
+  public boolean block(int timeout) throws IOException {
+    long startTime = System.currentTimeMillis();
+    long timeLeft = timeout;
+    while(isBusy() && (timeout == 0 || timeLeft > 0)) {
       Selector selector = Selector.open();
       int op = state.isRead() ? SelectionKey.OP_READ : SelectionKey.OP_WRITE;
       socket.register(selector, op);
-      selector.select();
+      selector.select(timeLeft);
       selector.close();
       consumeInput();
+
+      timeLeft = timeout == 0 ? 0 : timeout - (System.currentTimeMillis() - startTime);
     }
-    return getResult();
+
+    System.out.println("isbusy: " + isBusy());
+    System.out.println("last result: " + lastResultSet);
+
+    return !isBusy();
   }
 
   public boolean flush() throws IOException {
@@ -273,14 +297,6 @@ public class PostgresqlConnection {
 
   /** the shitty implementation the makes the connection ticks **/
 
-  private void checkError(ResultSet result) throws PostgresqlException {
-    if (result.hasError()) {
-      ErrorResponse error = result.getError();
-      String message = error.getFields().get('M');
-      throw new PostgresqlException(message, result);
-    }
-  }
-
   private void sendDescribeCommon(Describe describeMessage) throws IOException {
     currentOutBuffer = describeMessage.toBytes();
     state = ConnectionState.SendingDescribe;
@@ -293,18 +309,17 @@ public class PostgresqlConnection {
   private void checkIsReady() {
     if (state != ConnectionState.ReadyForQuery && state != ConnectionState.ExtendedReadyForQuery)
       throw new IllegalStateException("Connection isn't ready for a new query. State: " + state.name());
+
+    // reset the result from previous queries
+    lastResultSet = null;
   }
 
-  private ResultSet waitForResult() throws IOException, PostgresqlException {
-    ResultSet prevResult, result;
-    prevResult = result = null;
-    while ((result = getResult()) != null) {
-      prevResult = result;
+  private ResultSet getLastResultThrowError() throws IOException, PostgresqlException {
+    ResultSet result = getLastResult();
+    if (result != null && result.hasError()) {
+      throw new PostgresqlException(result.getError().getErrorMesssage(), result);
     }
-    if (prevResult != null && prevResult.hasError()) {
-      throw new PostgresqlException(prevResult.getError().getFields().get((byte) 'M'), prevResult);
-    }
-    return prevResult;
+    return result;
   }
 
   private PostgresqlConnection(Properties props) {
@@ -466,6 +481,8 @@ public class PostgresqlConnection {
 
   private void processQueryResponse() {
     ProtocolMessage message = currentInMessage.getMessage();
+    System.out.println("received: " + currentInMessage.getMessage().getType().name());
+
     switch(message.getType()) {
     case CopyInResponse:
     case CopyOutResponse:
@@ -475,11 +492,10 @@ public class PostgresqlConnection {
       inProgress = null;
       break;
     case EmptyQueryResponse:
-      lastResultSet = new ResultSet();
-      inProgress = null;
+      if (inProgress == null) inProgress = new ResultSet();
       break;
     case RowDescription:
-      inProgress = new ResultSet();
+      if (inProgress == null) inProgress = new ResultSet();
       // fetch the row description
       RowDescription description = (RowDescription) message;
       inProgress.setDescription(description);
@@ -489,13 +505,14 @@ public class PostgresqlConnection {
       inProgress.appendRow(dataRow);
       break;
     case ErrorResponse:
-      inProgress = new ResultSet();
+      if (inProgress == null) inProgress = new ResultSet();
       ErrorResponse error = (ErrorResponse) message;
       inProgress.setErrorResponse(error);
-      lastResultSet = inProgress;
-      inProgress = null;
+      System.out.println("Added error: " + error.getFields().get((byte) 'M'));
       break;
     case ReadyForQuery:
+      lastResultSet = inProgress;
+      inProgress = null;
       transactionStatus = ((ReadyForQuery) message).getTransactionStatus();
       break;
     }
