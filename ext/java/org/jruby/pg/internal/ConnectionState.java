@@ -98,6 +98,9 @@ public enum ConnectionState {
     case ReadingAuthentication:
     case ReadingAuthenticationResponse:
       switch (receivedMessageType) {
+      case AuthenticationCleartextPassword:
+      case AuthenticationMD5Password:
+        return SendingAuthentication;
       case AuthenticationOk:
         return ReadingBackendData;
       }

@@ -11,6 +11,11 @@ public class PostgresqlConnectionUtils {
     return prop.getProperty("dbname");
   }
 
+  public static String password(Properties prop) {
+    return prop.getProperty("password", "");
+  }
+
+
   public static int port(Properties prop) {
     return Integer.parseInt(prop.getProperty("port", "54321"));
   }

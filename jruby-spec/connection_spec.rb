@@ -181,7 +181,17 @@ describe PG::Connection do
       rescue
         # ignore
       end
-      @conn2 = PG.connect "#{@conninfo} user=md5"
+      @conn2 = PG.connect "#{@conninfo} user=encrypt"
+    end
+
+    it 'fails if no password was given and a password is required' do
+      @conn.exec 'ROLLBACK'
+      begin
+        @conn.exec "CREATE USER encrypt WITH PASSWORD 'md5'"
+      rescue
+        # ignore
+      end
+      @conn2 = PG.connect "#{@conninfo} user=encrypt"
     end
 
     it 'fails if the user does not exist' do
