@@ -340,7 +340,8 @@ public class PostgresqlConnection {
 
   private void connect() throws Exception {
     connectAsync();
-    while (state.pollingState() != ConnectionState.PGRES_POLLING_OK) {
+    while (state.pollingState() != ConnectionState.PGRES_POLLING_OK &&
+        state.pollingState() != ConnectionState.PGRES_POLLING_FAILED) {
       Selector selector = Selector.open();
       // do connection poll
       ConnectionState pollState = connectPoll();
@@ -353,6 +354,9 @@ public class PostgresqlConnection {
       }
       selector.close();
     }
+
+    if (state.pollingState() == ConnectionState.PGRES_POLLING_FAILED)
+      throw new PostgresqlException(lastResultSet.getError().getErrorMesssage(), lastResultSet);
   }
 
   private void connectAsync() throws IOException {
@@ -540,6 +544,10 @@ public class PostgresqlConnection {
       break;
     case ReadyForQuery:
       transactionStatus = ((ReadyForQuery) message).getTransactionStatus();
+      break;
+    case ErrorResponse:
+      if (lastResultSet == null) lastResultSet = new ResultSet();
+      lastResultSet.setErrorResponse((ErrorResponse) message);
       break;
     }
   }

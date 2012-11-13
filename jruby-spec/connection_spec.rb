@@ -184,6 +184,12 @@ describe PG::Connection do
       @conn2 = PG.connect "#{@conninfo} user=md5"
     end
 
+    it 'fails if the user does not exist' do
+      expect {
+        @conn2 = PG.connect "#{@conninfo} user=nonexistentuser"
+      }.to raise_error(RuntimeError, /does not exist/)
+    end
+
     it "correctly finishes COPY queries passed to #async_exec" # do
     # 	@conn.async_exec( "COPY (SELECT 1 UNION ALL SELECT 2) TO STDOUT" )
 
