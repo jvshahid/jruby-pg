@@ -16,13 +16,8 @@ public class CommandComplete extends BackendMessage {
     Matcher matcher = COMMANDS.matcher(tag);
     if (matcher.matches()) {
       command = matcher.group(1);
-      if (matcher.groupCount() == 3) {
-        oid = Integer.parseInt(matcher.group(2).trim());
-        rows = Integer.parseInt(matcher.group(3));
-      } else {
-        rows = Integer.parseInt(matcher.group(2));
-        oid = -1;
-      }
+      rows = Integer.parseInt(matcher.group(3));
+      oid = matcher.group(2) == null ? -1 : Integer.parseInt(matcher.group(2).trim());
     } else {
       command = tag;
       rows = oid = -1;

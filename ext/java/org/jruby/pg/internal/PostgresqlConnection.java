@@ -497,6 +497,7 @@ public class PostgresqlConnection {
     case CopyOutResponse:
       throw new UnsupportedOperationException("Copy operations isn't supported yet");
     case CommandComplete:
+      if (inProgress == null) inProgress = new ResultSet();
       lastResultSet = inProgress;
       inProgress = null;
       break;

@@ -152,8 +152,8 @@ public class Connection extends RubyObject {
     }
 
     @JRubyMethod(meta = true)
-    public static IRubyObject quote_ident(ThreadContext context, IRubyObject self, IRubyObject arg0) {
-        return context.nil;
+    public static IRubyObject quote_ident(ThreadContext context, IRubyObject self, IRubyObject identifier) {
+      return quoteIdentifier(context, identifier);
     }
 
     @JRubyMethod(rest = true, meta = true)
@@ -216,6 +216,21 @@ public class Connection extends RubyObject {
         return Character.toUpperCase(b) - 'A' + 10;
       else
         return b - '0';
+    }
+
+    private static IRubyObject quoteIdentifier(ThreadContext context, IRubyObject _identifier) {
+      RubyString identifier = (RubyString) _identifier;
+      byte[] bytes = identifier.getBytes();
+      ByteArrayOutputStream out = new ByteArrayOutputStream();
+      out.write('"');
+      for (int i = 0; i < bytes.length; i++) {
+        if (bytes[i] == '"')
+          out.write('"');
+        out.write(bytes[i]);
+      }
+      out.write('"');
+      byte[] newBytes = out.toByteArray();
+      return context.runtime.newString(new ByteList(newBytes));
     }
 
     private static IRubyObject escapeBytes(ThreadContext context, IRubyObject _array, IRubyObject encoding, boolean standardConforminStrings) {
@@ -496,6 +511,7 @@ public class Connection extends RubyObject {
         String query = args[0].convertToString().toString();
         ResultSet set = null;
         try {
+          System.out.println("query: " + query);
             if (args.length == 1) {
               set = postgresqlConnection.exec(query);
             } else {
@@ -602,26 +618,34 @@ public class Connection extends RubyObject {
     @JRubyMethod(required = 1, optional = 2)
     public IRubyObject exec_prepared(ThreadContext context, IRubyObject[] args, Block block) {
       try {
-        String queryName = args[0].asJavaString();
-        Value[] values;
-        int[] oids;
-        if (args.length > 1) {
-          RubyArray array = (RubyArray) args[1];
-          values = new Value[array.getLength()];
-          oids = new int[array.getLength()];
-          fillValuesAndFormat(context, array, values, oids);
-        } else {
-          values = new Value[0];
-          oids = new int[0];
-        }
-        Format format = getFormat(context, args);
-        ResultSet set = postgresqlConnection.execPrepared(queryName, values, format);
+        ResultSet set = execPreparedCommon(context, args, false);
         return createResult(context, set, args, block);
       } catch (PostgresqlException e) {
         throw newPgError(context, e.getLocalizedMessage(), e.getResultSet(), encoding);
       } catch (Exception e) {
         throw newPgError(context, e.getLocalizedMessage(), null, encoding);
       }
+    }
+
+    private ResultSet execPreparedCommon(ThreadContext context, IRubyObject[] args, boolean async) throws IOException, PostgresqlException {
+      String queryName = args[0].asJavaString();
+      System.out.println("query name: " + queryName);
+      Value[] values;
+      int[] oids;
+      if (args.length > 1) {
+        RubyArray array = (RubyArray) args[1];
+        values = new Value[array.getLength()];
+        oids = new int[array.getLength()];
+        fillValuesAndFormat(context, array, values, oids);
+      } else {
+        values = new Value[0];
+        oids = new int[0];
+      }
+      Format format = getFormat(context, args);
+      if (!async)
+        return postgresqlConnection.execPrepared(queryName, values, format);
+      postgresqlConnection.sendExecPrepared(queryName, values, format);
+      return null;
     }
 
     @JRubyMethod(required = 1)
@@ -664,11 +688,6 @@ public class Connection extends RubyObject {
     }
 
     @JRubyMethod
-    public IRubyObject escape_identifier(ThreadContext context, IRubyObject arg0) {
-        return context.nil;
-    }
-
-    @JRubyMethod
     public IRubyObject escape_bytea(ThreadContext context, IRubyObject array) {
       return escapeBytes(context, array, rubyEncoding, postgresqlConnection.getStandardConformingStrings());
     }
@@ -700,7 +719,14 @@ public class Connection extends RubyObject {
 
     @JRubyMethod(rest = true)
     public IRubyObject send_query_prepared(ThreadContext context, IRubyObject[] args) {
+      try {
+        execPreparedCommon(context, args, true);
         return context.nil;
+      } catch (PostgresqlException e) {
+        throw newPgError(context, e.getLocalizedMessage(), e.getResultSet(), encoding);
+      } catch (Exception e) {
+        throw newPgError(context, e.getLocalizedMessage(), null, encoding);
+      }
     }
 
     @JRubyMethod
@@ -866,9 +892,9 @@ public class Connection extends RubyObject {
         return context.nil;
     }
 
-    @JRubyMethod
-    public IRubyObject quote_ident(ThreadContext context, IRubyObject arg0) {
-        return context.nil;
+    @JRubyMethod(required = 1)
+    public IRubyObject quote_ident(ThreadContext context, IRubyObject identifier) {
+      return quoteIdentifier(context, identifier);
     }
 
     @JRubyMethod

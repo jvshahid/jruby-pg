@@ -18,6 +18,9 @@ class PG::Connection
     "'#{escape_literal_native str}'"
   end
 
+  def escape_identifier str
+    "\"#{escape_literal_native str}\""
+  end
 
 	### Parse the connection +args+ into a connection-parameter string. See PG::Connection.new
 	### for valid arguments.

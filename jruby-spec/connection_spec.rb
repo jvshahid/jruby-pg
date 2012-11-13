@@ -109,6 +109,44 @@ describe PG::Connection do
       @conn.server_version.should >=(80200)
     end
 
+    it 'quotes identifier correctly' do
+      table_name = @conn.quote_ident('foo')
+      column_name = @conn.quote_ident('bar')
+      @conn.exec "CREATE TABLE #{table_name} (#{column_name} text)"
+    end
+
+    it 'quotes identifier correctly when the static quote_ident is called' do
+      table_name = PG::Connection.quote_ident('foo')
+      column_name = PG::Connection.quote_ident('bar')
+      @conn.exec "CREATE TABLE #{table_name} (#{column_name} text)"
+    end
+
+    it 'returns an empty result set when an INSERT is executed' do
+      res = @conn.exec 'CREATE TABLE foo (bar INT)'
+      res.should_not be_nil
+      res = @conn.exec 'INSERT INTO foo VALUES (1234)'
+      res.should_not be_nil
+      res.nfields.should ==(0)
+    end
+
+    it 'delete does not fail' do
+      @conn.exec 'CREATE TABLE foo (bar INT)'
+      @conn.exec 'INSERT INTO foo VALUES (1234)'
+      res = @conn.exec 'DELETE FROM foo WHERE bar = 1234'
+      res.should_not be_nil
+      res.nfields.should ==(0)
+    end
+
+    it 'returns id when a new row is inserted' do
+      @conn.exec 'CREATE TABLE foo (id SERIAL UNIQUE, bar INT)'
+      @conn.prepare 'query', 'INSERT INTO foo(bar) VALUES ($1) returning id'
+      @conn.send_query_prepared 'query', ['1234']
+      @conn.block
+      res = @conn.get_last_result
+      res.should_not be_nil
+      res.nfields.should ==(1)
+    end
+
     it "correctly finishes COPY queries passed to #async_exec" # do
     # 	@conn.async_exec( "COPY (SELECT 1 UNION ALL SELECT 2) TO STDOUT" )
 

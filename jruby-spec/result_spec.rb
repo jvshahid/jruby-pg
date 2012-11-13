@@ -25,4 +25,9 @@ describe PG::Result do
     res = @conn.exec "SELECT 'foo'::bytea as n"
     res.ftype(0).should== PG::OID_BYTEA
   end
+
+  it 'returns the names of the fields in the result set' do
+    res = @conn.exec "Select 1 as n"
+    res.fields.should== ['n']
+  end
 end

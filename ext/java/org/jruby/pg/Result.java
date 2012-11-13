@@ -98,6 +98,11 @@ public class Result extends RubyObject {
 
     @JRubyMethod(name = {"nfields", "num_fields"})
     public IRubyObject nfields(ThreadContext context) {
+      System.out.println("result: " + jdbcResultSet);
+      if (jdbcResultSet == null)
+        throw context.runtime.newTypeError("foo");
+      if (jdbcResultSet.getDescription() == null)
+        return context.runtime.newFixnum(0);
       return context.runtime.newFixnum(jdbcResultSet.getDescription().getColumns().length);
     }
 
@@ -252,7 +257,14 @@ public class Result extends RubyObject {
 
     @JRubyMethod
     public IRubyObject fields(ThreadContext context) {
+      RowDescription description = jdbcResultSet.getDescription();
+      if (description == null)
         return context.nil;
+      Column[] columns = description.getColumns();
+      RubyArray fields = context.runtime.newArray(columns.length);
+      for (int i = 0; i < columns.length; i++)
+        fields.append(context.runtime.newString(columns[i].getName()));
+      return fields;
     }
 
     @JRubyMethod(required = 1, argTypes = {RubyFixnum.class})
