@@ -2,6 +2,23 @@ require 'rspec'
 require 'spec/lib/helpers'
 require 'pg'
 
+module PG::TestingHelpers
+  alias :old_log_and_run :log_and_run
+
+	def log_and_run( logpath, *cmd )
+    return old_log_and_run logpath, cmd unless cmd.first =~ /initdb/
+
+    tmp = old_log_and_run logpath, cmd
+    File.open("#{@test_pgdata}/pg_hba.conf", "w") do |f|
+      f.puts "# TYPE    DATABASE        USER            ADDRESS         METHOD"
+      f.puts "  host    all             password        127.0.0.1/32    password"
+      f.puts "  host    all             encrypt         127.0.0.1/32    md5"
+      f.puts "  host    all             all             127.0.0.1/32    trust"
+    end
+    tmp
+  end
+end
+
 describe PG::Connection do
   it 'assumes standard conforming strings is off before any connection is created' do
     # make sure that there are no last connections cached
@@ -145,6 +162,26 @@ describe PG::Connection do
       res = @conn.get_last_result
       res.should_not be_nil
       res.nfields.should ==(1)
+    end
+
+    it 'can authenticate clients using the clear password' do
+      @conn.exec 'ROLLBACK'
+      begin
+        @conn.exec "CREATE USER password WITH PASSWORD 'secret'"
+      rescue
+        # ignore
+      end
+      @conn2 = PG.connect "#{@conninfo} user=password"
+    end
+
+    it 'can authenticate clients using the md5 hash' do
+      @conn.exec 'ROLLBACK'
+      begin
+        @conn.exec "CREATE USER encrypt WITH PASSWORD 'md5'"
+      rescue
+        # ignore
+      end
+      @conn2 = PG.connect "#{@conninfo} user=md5"
     end
 
     it "correctly finishes COPY queries passed to #async_exec" # do
