@@ -168,7 +168,7 @@ public class Connection extends RubyObject {
           return value;
         }
         return connection;
-      } catch (IOException e) {
+      } catch (Exception e) {
         throw context.runtime.newIOError(e.getLocalizedMessage());
       }
     }

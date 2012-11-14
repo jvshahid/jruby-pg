@@ -4,6 +4,7 @@ import static org.jruby.pg.internal.PostgresqlConnectionUtils.dbname;
 import static org.jruby.pg.internal.PostgresqlConnectionUtils.host;
 import static org.jruby.pg.internal.PostgresqlConnectionUtils.password;
 import static org.jruby.pg.internal.PostgresqlConnectionUtils.port;
+import static org.jruby.pg.internal.PostgresqlConnectionUtils.ssl;
 import static org.jruby.pg.internal.PostgresqlConnectionUtils.user;
 
 import java.io.ByteArrayOutputStream;
@@ -40,6 +41,7 @@ import org.jruby.pg.internal.messages.ProtocolMessageBuffer;
 import org.jruby.pg.internal.messages.Query;
 import org.jruby.pg.internal.messages.ReadyForQuery;
 import org.jruby.pg.internal.messages.RowDescription;
+import org.jruby.pg.internal.messages.SSLRequest;
 import org.jruby.pg.internal.messages.Startup;
 import org.jruby.pg.internal.messages.Terminate;
 import org.jruby.pg.internal.messages.TransactionStatus;
@@ -53,7 +55,7 @@ public class PostgresqlConnection {
     return connection;
   }
 
-  public static PostgresqlConnection connectStart(Properties props) throws IOException {
+  public static PostgresqlConnection connectStart(Properties props) throws IOException, PostgresqlException {
     PostgresqlConnection connection = new PostgresqlConnection(props);
     connection.connectAsync();
     return connection;
@@ -371,6 +373,7 @@ public class PostgresqlConnection {
     this.user = user(props);
     this.dbname = dbname(props);
     this.password = password(props);
+    this.ssl = ssl(props);
   }
 
   private void connect() throws Exception {
@@ -394,11 +397,36 @@ public class PostgresqlConnection {
       throw new PostgresqlException(lastResultSet.getError().getErrorMesssage(), lastResultSet);
   }
 
-  private void connectAsync() throws IOException {
+  private void connectAsync() throws IOException, PostgresqlException {
     try {
       socket = SocketChannel.open();
       socket.configureBlocking(true);
       socket.connect(new InetSocketAddress(host, port));
+
+      // do the SSL negotiation
+      if (!ssl.equals("disable")) {
+        socket.configureBlocking(true);
+        currentOutBuffer = new SSLRequest().toBytes();
+        socket.write(currentOutBuffer);
+        ByteBuffer tempBuffer = ByteBuffer.allocate(1);
+        socket.read(tempBuffer);
+        tempBuffer.flip();
+        switch(tempBuffer.get()) {
+        case 'E':
+          socket.close();
+          socket = SocketChannel.open();
+          socket.configureBlocking(true);
+          socket.connect(new InetSocketAddress(host, port));
+        case 'N':
+          if (ssl.equals("require")) {
+            socket.close();
+            throw new PostgresqlException("Cannot establish ssl socket with server", null);
+          }
+          break;
+        case 'S':
+          throw new UnsupportedOperationException("Not supported yet");
+        }
+      }
 
       // send startup message
       socket.configureBlocking(false);
@@ -636,6 +664,7 @@ public class PostgresqlConnection {
   private final int                 port;
   private final String              user;
   private final String              password;
+  private final String             ssl;
   private boolean                   nonBlocking     = false;
 
   private boolean                   shouldBind      = false;
