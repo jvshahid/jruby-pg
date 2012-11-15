@@ -7,6 +7,7 @@ import java.io.PrintWriter;
 import java.nio.channels.SelectableChannel;
 import java.sql.SQLException;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Properties;
@@ -35,6 +36,8 @@ import org.jruby.pg.internal.PostgresqlException;
 import org.jruby.pg.internal.ResultSet;
 import org.jruby.pg.internal.Value;
 import org.jruby.pg.internal.messages.Format;
+import org.jruby.pg.internal.messages.NotificationResponse;
+import org.jruby.runtime.Arity;
 import org.jruby.runtime.Block;
 import org.jruby.runtime.ObjectAllocator;
 import org.jruby.runtime.ThreadContext;
@@ -541,6 +544,7 @@ public class Connection extends RubyObject {
         } catch (PostgresqlException e) {
           throw newPgError(context, e.getLocalizedMessage(), e.getResultSet(), encoding);
         } catch (Exception sqle) {
+            sqle.printStackTrace();
             throw newPgError(context, sqle.getLocalizedMessage(), null, encoding);
         }
 
@@ -808,7 +812,20 @@ public class Connection extends RubyObject {
 
     @JRubyMethod
     public IRubyObject notifies(ThreadContext context) {
+      NotificationResponse notification = postgresqlConnection.notifications();
+      if (notification == null)
         return context.nil;
+      RubyHash hash = new RubyHash(context.runtime);
+
+      RubySymbol relname = context.runtime.newSymbol("relname");
+      RubySymbol pid = context.runtime.newSymbol("be_pid");
+      RubySymbol extra = context.runtime.newSymbol("extra");
+
+      hash.op_aset(context, relname, context.runtime.newString(notification.getCondition()));
+      hash.op_aset(context, pid, context.runtime.newFixnum(notification.getPid()));
+      hash.op_aset(context, extra, context.runtime.newString(notification.getPayload()));
+
+      return hash;
     }
 
     /******     PG::Connection INSTANCE METHODS: COPY     ******/
@@ -898,9 +915,29 @@ public class Connection extends RubyObject {
       }
     }
 
-    @JRubyMethod(name = {"wait_for_notify", "notifies_wait"}, rest = true)
-    public IRubyObject wait_for_notify(ThreadContext context, IRubyObject[] args) {
-        return context.nil;
+    @JRubyMethod(name = {"wait_for_notify", "notifies_wait"}, optional = 1)
+    public IRubyObject wait_for_notify(ThreadContext context, IRubyObject[] args, Block block) {
+      try {
+        NotificationResponse notification = postgresqlConnection.waitForNotify();
+        if (block.isGiven()) {
+          if (block.arity() == Arity.NO_ARGUMENTS) return block.call(context);
+          RubyString condition = context.runtime.newString(notification.getCondition());
+          RubyFixnum pid = context.runtime.newFixnum(notification.getPid());
+          RubyString payload = context.runtime.newString(notification.getPayload());
+          if (!block.arity().isFixed()) {
+            return block.call(context, condition, pid, payload);
+          } else if (block.arity().required() == 2) {
+            return block.call(context, condition, pid);
+          } else if (block.arity().required() == 3) {
+            return block.call(context, condition, pid, payload);
+          }
+          throw context.runtime.newArgumentError("Expected a block with arity 2 or 3");
+        } else {
+          return context.runtime.newString(notification.getCondition());
+        }
+      } catch (IOException e) {
+        throw newPgError(context, e.getLocalizedMessage(), null, encoding);
+      }
     }
 
     @JRubyMethod(required = 1)

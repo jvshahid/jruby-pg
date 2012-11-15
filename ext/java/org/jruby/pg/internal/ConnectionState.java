@@ -13,6 +13,7 @@ public enum ConnectionState {
   Closed,
 
   // Connecting,
+  ReadingNotifications,
   ReadingAuthenticationResponse,
   ReadingParameterStatus,
   ReadingBackendData,
@@ -74,7 +75,9 @@ public enum ConnectionState {
   }
 
   public ConnectionState nextState(MessageType receivedMessageType) {
-    if (receivedMessageType == MessageType.NoticeResponse || receivedMessageType == MessageType.ParameterStatus)
+    if (receivedMessageType == MessageType.NoticeResponse ||
+        receivedMessageType == MessageType.ParameterStatus ||
+        receivedMessageType == MessageType.NotificationResponse)
       return this;
 
     if (receivedMessageType == MessageType.ErrorResponse) {
@@ -163,6 +166,7 @@ public enum ConnectionState {
     case ReadingAuthentication:
     case ReadingParameterStatus:
     case ReadingBackendData:
+    case ReadingNotifications:
     case ReadingQueryResponse:
     case ReadingParseResponse:
     case ReadingBindResponse:
@@ -278,6 +282,7 @@ public enum ConnectionState {
     case SendingExecute:
     case ReadingExecuteResponse:
     case ExtendedReadyForQuery:
+    case ReadingNotifications:
       return true;
     default:
       return false;

@@ -36,12 +36,12 @@ import org.jruby.pg.internal.messages.DataRow;
 import org.jruby.pg.internal.messages.Describe;
 import org.jruby.pg.internal.messages.ErrorResponse;
 import org.jruby.pg.internal.messages.Format;
+import org.jruby.pg.internal.messages.NotificationResponse;
 import org.jruby.pg.internal.messages.ParameterDescription;
 import org.jruby.pg.internal.messages.ParameterStatus;
 import org.jruby.pg.internal.messages.Parse;
 import org.jruby.pg.internal.messages.PasswordMessage;
 import org.jruby.pg.internal.messages.ProtocolMessage;
-import org.jruby.pg.internal.messages.Sync;
 import org.jruby.pg.internal.messages.ProtocolMessage.MessageType;
 import org.jruby.pg.internal.messages.ProtocolMessageBuffer;
 import org.jruby.pg.internal.messages.Query;
@@ -49,6 +49,7 @@ import org.jruby.pg.internal.messages.ReadyForQuery;
 import org.jruby.pg.internal.messages.RowDescription;
 import org.jruby.pg.internal.messages.SSLRequest;
 import org.jruby.pg.internal.messages.Startup;
+import org.jruby.pg.internal.messages.Sync;
 import org.jruby.pg.internal.messages.Terminate;
 import org.jruby.pg.internal.messages.TransactionStatus;
 
@@ -94,7 +95,7 @@ public class PostgresqlConnection {
   public void consumeInput() throws IOException {
     try {
       if (state.isWrite()) {
-        flush(); // flush anyway there's no harm
+        flush();
       } else if (state.isRead()) {
         int read = socket.read(currentInMessage.getBuffer());
         if (read == -1) {
@@ -110,7 +111,6 @@ public class PostgresqlConnection {
     }
     changeState();
 
-    System.out.println("remaining bytes: " + socket.shouldWaitForData());
     if (state.isRead() && socket.shouldWaitForData() > 0) {
       // we cannot return until the buffer is ready or
       // we're not in the read state anymore, otherwise
@@ -273,6 +273,25 @@ public class PostgresqlConnection {
       return lastResultSet.isEmpty();
     }
     return false;
+  }
+
+  public NotificationResponse notifications() {
+    return notifications.isEmpty() ? null : notifications.remove(0);
+  }
+
+  public NotificationResponse waitForNotify() throws IOException {
+    checkIsReady();
+    state = ConnectionState.ReadingNotifications;
+    consumeInput();
+    while (notifications.isEmpty()) {
+      Selector selector = Selector.open();
+      socket.register(selector, SelectionKey.OP_READ);
+      selector.select();
+      selector.close();
+      consumeInput();
+    }
+    state = ConnectionState.ReadyForQuery;
+    return notifications.remove(0);
   }
 
   public ResultSet getLastResult() throws IOException {
@@ -535,7 +554,11 @@ public class PostgresqlConnection {
 
   private void processMessage() {
     if (currentInMessage.getMessage().getType() == MessageType.NoticeResponse) {
+    }
 
+    if (currentInMessage.getMessage().getType() == MessageType.NotificationResponse) {
+      notifications.add((NotificationResponse) currentInMessage.getMessage());
+      return;
     }
     if (currentInMessage.getMessage().getType() == MessageType.ParameterStatus) {
       processParameterStatusAndBackend();
@@ -687,28 +710,29 @@ public class PostgresqlConnection {
     return !shouldBind && !shouldDescribe && !shouldExecute;
   }
 
-  private final String              host;
-  private final String              dbname;
-  private final int                 port;
-  private final String              user;
-  private final String              password;
-  private final String              ssl;
-  private boolean                   nonBlocking     = false;
+  private final String                     host;
+  private final String                     dbname;
+  private final int                        port;
+  private final String                     user;
+  private final String                     password;
+  private final String                     ssl;
+  private boolean                          nonBlocking     = false;
 
-  private boolean                   shouldBind      = false;
-  private boolean                   shouldDescribe  = false;
-  private boolean                   shouldExecute   = false;
+  private boolean                          shouldBind      = false;
+  private boolean                          shouldDescribe  = false;
+  private boolean                          shouldExecute   = false;
 
-  private Value[]                   values;
-  private Format                    format;
+  private Value[]                          values;
+  private Format                           format;
 
-  private TransactionStatus         transactionStatus;
-  private ResultSet                 inProgress;
-  private final List<ResultSet>     lastResultSet   = new LinkedList<ResultSet>();
-  private SocketWrapper             socket;
-  private ConnectionState           state           = ConnectionState.CONNECTION_BAD;
-  private ByteBuffer                currentOutBuffer;
-  private ProtocolMessageBuffer     currentInMessage;
-  private final Map<String, String> parameterValues = new HashMap<String, String>();
-  private BackendKeyData            backendKeyData;
+  private TransactionStatus                transactionStatus;
+  private ResultSet                        inProgress;
+  private final List<ResultSet>            lastResultSet   = new LinkedList<ResultSet>();
+  private final List<NotificationResponse> notifications   = new LinkedList<NotificationResponse>();
+  private SocketWrapper                    socket;
+  private ConnectionState                  state           = ConnectionState.CONNECTION_BAD;
+  private ByteBuffer                       currentOutBuffer;
+  private ProtocolMessageBuffer            currentInMessage;
+  private final Map<String, String>        parameterValues = new HashMap<String, String>();
+  private BackendKeyData                   backendKeyData;
 }

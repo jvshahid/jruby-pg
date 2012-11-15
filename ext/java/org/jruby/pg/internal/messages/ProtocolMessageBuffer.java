@@ -133,6 +133,11 @@ public class ProtocolMessageBuffer {
       return new ParseComplete();
     case '2':
       return new BindComplete();
+    case 'A':
+      pid = rest.getInt();
+      String condition = ByteUtils.byteBufferToString(ByteUtils.getNullTerminatedBytes(rest));
+      String payload = ByteUtils.byteBufferToString(ByteUtils.getNullTerminatedBytes(rest));
+      return new NotificationResponse(pid, condition, payload);
     case 'Z':
       byte transactionStatus = rest.get();
       return new ReadyForQuery(TransactionStatus.fromByte(transactionStatus), rest.capacity() + 4);
