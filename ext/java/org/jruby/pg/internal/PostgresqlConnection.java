@@ -20,6 +20,8 @@ import java.nio.channels.SocketChannel;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HashMap;
+import java.util.LinkedList;
+import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 
@@ -58,7 +60,8 @@ public class PostgresqlConnection {
     return connection;
   }
 
-  public static PostgresqlConnection connectStart(Properties props) throws IOException, PostgresqlException, NoSuchAlgorithmException {
+  public static PostgresqlConnection connectStart(Properties props) throws IOException, PostgresqlException,
+      NoSuchAlgorithmException {
     PostgresqlConnection connection = new PostgresqlConnection(props);
     connection.connectAsync();
     return connection;
@@ -267,7 +270,7 @@ public class PostgresqlConnection {
 
   public boolean isBusy() {
     if (state.shouldBlock() || state.isFlush() || state.isSync()) {
-      return lastResultSet == null;
+      return lastResultSet.isEmpty();
     }
     return false;
   }
@@ -283,8 +286,9 @@ public class PostgresqlConnection {
 
   public ResultSet getResult() throws IOException {
     block();
-    ResultSet temp = lastResultSet;
-    lastResultSet = null;
+    ResultSet temp = null;
+    if (!lastResultSet.isEmpty())
+      temp = lastResultSet.remove(0);
     return temp;
   }
 
@@ -372,7 +376,7 @@ public class PostgresqlConnection {
       throw new IllegalStateException("Connection isn't ready for a new query. State: " + state.name());
 
     // reset the result from previous queries
-    lastResultSet = null;
+    lastResultSet.clear();
   }
 
   private ResultSet getLastResultThrowError() throws IOException, PostgresqlException {
@@ -409,8 +413,10 @@ public class PostgresqlConnection {
       selector.close();
     }
 
-    if (state.pollingState() == ConnectionState.PGRES_POLLING_FAILED)
-      throw new PostgresqlException(lastResultSet.getError().getErrorMesssage(), lastResultSet);
+    if (state.pollingState() == ConnectionState.PGRES_POLLING_FAILED) {
+      ResultSet result = lastResultSet.get(0);
+      throw new PostgresqlException(result.getError().getErrorMesssage(), result);
+    }
   }
 
   private void connectAsync() throws IOException, PostgresqlException, NoSuchAlgorithmException {
@@ -540,9 +546,11 @@ public class PostgresqlConnection {
     case ReadingAuthentication:
     case ReadingAuthenticationResponse:
       if (currentInMessage.getMessage().getType() == MessageType.ErrorResponse) {
-        if (lastResultSet == null)
-          lastResultSet = new ResultSet();
-        lastResultSet.setErrorResponse((ErrorResponse) currentInMessage.getMessage());
+        if (inProgress == null)
+          inProgress = new ResultSet();
+        inProgress.setErrorResponse((ErrorResponse) currentInMessage.getMessage());
+        lastResultSet.add(inProgress);
+        inProgress = null;
       }
       break;
     case ReadingBackendData:
@@ -570,7 +578,7 @@ public class PostgresqlConnection {
 
   private void processSyncReadyForQuery() {
     if (extendedQueryIsOver()) {
-      lastResultSet = inProgress;
+      lastResultSet.add(inProgress);
       inProgress = null;
     }
   }
@@ -619,7 +627,7 @@ public class PostgresqlConnection {
     case CommandComplete:
       if (inProgress == null)
         inProgress = new ResultSet();
-      lastResultSet = inProgress;
+      lastResultSet.add(inProgress);
       inProgress = null;
       break;
     case EmptyQueryResponse:
@@ -645,7 +653,7 @@ public class PostgresqlConnection {
       System.out.println("Added error: " + error.getFields().get((byte) 'M'));
       break;
     case ReadyForQuery:
-      lastResultSet = inProgress;
+      lastResultSet.add(inProgress);
       inProgress = null;
       transactionStatus = ((ReadyForQuery) message).getTransactionStatus();
       break;
@@ -666,9 +674,11 @@ public class PostgresqlConnection {
       transactionStatus = ((ReadyForQuery) message).getTransactionStatus();
       break;
     case ErrorResponse:
-      if (lastResultSet == null)
-        lastResultSet = new ResultSet();
-      lastResultSet.setErrorResponse((ErrorResponse) message);
+      if (inProgress == null)
+        inProgress = new ResultSet();
+      inProgress.setErrorResponse((ErrorResponse) message);
+      lastResultSet.add(inProgress);
+      inProgress = null;
       break;
     }
   }
@@ -694,7 +704,7 @@ public class PostgresqlConnection {
 
   private TransactionStatus         transactionStatus;
   private ResultSet                 inProgress;
-  private ResultSet                 lastResultSet;
+  private final List<ResultSet>     lastResultSet   = new LinkedList<ResultSet>();
   private SocketWrapper             socket;
   private ConnectionState           state           = ConnectionState.CONNECTION_BAD;
   private ByteBuffer                currentOutBuffer;

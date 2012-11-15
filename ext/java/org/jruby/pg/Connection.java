@@ -355,6 +355,11 @@ public class Connection extends RubyObject {
 
         Properties props = parse_args(context, args);
 
+        // to make testing possible
+        if (System.getenv("PG_TEST_SSL") != null) {
+          props.setProperty("ssl", "require");
+        }
+
         try {
             // connection = (BaseConnection)driver.connect(connectionString, props);
             postgresqlConnection = PostgresqlConnection.connectDb(props);
