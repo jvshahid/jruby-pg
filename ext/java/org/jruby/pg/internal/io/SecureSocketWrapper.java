@@ -120,33 +120,25 @@ public class SecureSocketWrapper implements SocketWrapper {
   @Override
   public int read(ByteBuffer buffer) throws IOException {
     if (!isPuttingInUnwrappedInBuffer) {
-      System.out.println("unwrapped buffer has some data: " + unwrappedIn.remaining());
       while (buffer.remaining() > 0 && unwrappedIn.remaining() > 0)
         buffer.put(unwrappedIn.get());
-      System.out.println("remaining in buffer: " + buffer.remaining() + ", remaing in unwrapped: "
-          + unwrappedIn.remaining());
       if (unwrappedIn.remaining() == 0) {
-        System.out.println("unwrapped buffer is empty");
         isPuttingInUnwrappedInBuffer = true;
         unwrappedIn.clear();
       }
       return 0;
     }
     if (isPuttingInInBuffer) {
-      System.out.println("reading into the wrapped data buffer");
       int read = channel.read(in);
       if (in.remaining() > 0) {
         in.flip();
-        System.out.println("wrapped buffer has some data: " + in.remaining());
         isPuttingInInBuffer = false;
       } else {
         return read;
       }
     }
-    System.out.println("current wrapped data size: " + in.remaining());
     SSLEngineResult result = sslEngine.unwrap(in, unwrappedIn);
     lastStatus = result.getStatus();
-    System.out.println("last status: " + lastStatus.name() + ", remaining in in buffer: " + in.remaining());
     unwrappedIn.flip();
     isPuttingInUnwrappedInBuffer = false;
     if (in.remaining() == 0) {
