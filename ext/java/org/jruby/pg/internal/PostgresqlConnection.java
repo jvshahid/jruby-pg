@@ -13,6 +13,7 @@ import java.io.PrintWriter;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.ClosedChannelException;
+import java.nio.channels.SelectableChannel;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
 import java.nio.channels.SocketChannel;
@@ -22,6 +23,8 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Properties;
 
+import org.jruby.pg.internal.io.SecureSocketWrapper;
+import org.jruby.pg.internal.io.SocketWrapper;
 import org.jruby.pg.internal.messages.AuthenticationMD5Password;
 import org.jruby.pg.internal.messages.BackendKeyData;
 import org.jruby.pg.internal.messages.Bind;
@@ -55,7 +58,7 @@ public class PostgresqlConnection {
     return connection;
   }
 
-  public static PostgresqlConnection connectStart(Properties props) throws IOException, PostgresqlException {
+  public static PostgresqlConnection connectStart(Properties props) throws IOException, PostgresqlException, NoSuchAlgorithmException {
     PostgresqlConnection connection = new PostgresqlConnection(props);
     connection.connectAsync();
     return connection;
@@ -103,6 +106,16 @@ public class PostgresqlConnection {
       throw e;
     }
     changeState();
+
+    System.out.println("remaining bytes: " + socket.shouldWaitForData());
+    if (state.isRead() && socket.shouldWaitForData() > 0) {
+      // we cannot return until the buffer is ready or
+      // we're not in the read state anymore, otherwise
+      // the user can block using select waiting for data
+      // to read while the data is in buffered by out socket
+      System.out.println("trying to read again");
+      consumeInput();
+    }
   }
 
   public ConnectionState connectPoll() throws IOException {
@@ -219,8 +232,8 @@ public class PostgresqlConnection {
     changeState();
   }
 
-  public SocketChannel getSocket() {
-    return socket;
+  public SelectableChannel getSocket() {
+    return socket.getSocket();
   }
 
   public void close() throws IOException {
@@ -283,13 +296,16 @@ public class PostgresqlConnection {
     long startTime = System.currentTimeMillis();
     long timeLeft = timeout;
     while (isBusy() && (timeout == 0 || timeLeft > 0)) {
-      Selector selector = Selector.open();
-      int op = state.isRead() ? SelectionKey.OP_READ : SelectionKey.OP_WRITE;
-      socket.register(selector, op);
-      selector.select(timeLeft);
-      selector.close();
+      if (state.isRead() && socket.shouldWaitForData() > 0) {
+        // we have data that we can use
+      } else {
+        Selector selector = Selector.open();
+        int op = state.isRead() ? SelectionKey.OP_READ : SelectionKey.OP_WRITE;
+        socket.register(selector, op);
+        selector.select(timeLeft);
+        selector.close();
+      }
       consumeInput();
-
       timeLeft = timeout == 0 ? 0 : timeout - (System.currentTimeMillis() - startTime);
     }
 
@@ -397,9 +413,9 @@ public class PostgresqlConnection {
       throw new PostgresqlException(lastResultSet.getError().getErrorMesssage(), lastResultSet);
   }
 
-  private void connectAsync() throws IOException, PostgresqlException {
+  private void connectAsync() throws IOException, PostgresqlException, NoSuchAlgorithmException {
     try {
-      socket = SocketChannel.open();
+      socket = new NonSecureSocketWrapper(SocketChannel.open());
       socket.configureBlocking(true);
       socket.connect(new InetSocketAddress(host, port));
 
@@ -411,10 +427,10 @@ public class PostgresqlConnection {
         ByteBuffer tempBuffer = ByteBuffer.allocate(1);
         socket.read(tempBuffer);
         tempBuffer.flip();
-        switch(tempBuffer.get()) {
+        switch (tempBuffer.get()) {
         case 'E':
           socket.close();
-          socket = SocketChannel.open();
+          socket = new NonSecureSocketWrapper(SocketChannel.open());
           socket.configureBlocking(true);
           socket.connect(new InetSocketAddress(host, port));
         case 'N':
@@ -424,7 +440,9 @@ public class PostgresqlConnection {
           }
           break;
         case 'S':
-          throw new UnsupportedOperationException("Not supported yet");
+          socket = new SecureSocketWrapper(socket);
+          socket.doHandshake();
+          break;
         }
       }
 
@@ -442,7 +460,7 @@ public class PostgresqlConnection {
   private void changeState() throws IOException {
     System.out.println("before: " + state.name());
     if (state.isWrite()) {
-      if (currentOutBuffer.remaining() == 0)
+      if (currentOutBuffer.remaining() == 0 && socket.outBufferRemaining() == 0)
         state = state.nextState();
     } else if (state.isRead()) {
       if (currentInMessage.remaining() == 0) {
@@ -664,7 +682,7 @@ public class PostgresqlConnection {
   private final int                 port;
   private final String              user;
   private final String              password;
-  private final String             ssl;
+  private final String              ssl;
   private boolean                   nonBlocking     = false;
 
   private boolean                   shouldBind      = false;
@@ -677,7 +695,7 @@ public class PostgresqlConnection {
   private TransactionStatus         transactionStatus;
   private ResultSet                 inProgress;
   private ResultSet                 lastResultSet;
-  private SocketChannel             socket;
+  private SocketWrapper             socket;
   private ConnectionState           state           = ConnectionState.CONNECTION_BAD;
   private ByteBuffer                currentOutBuffer;
   private ProtocolMessageBuffer     currentInMessage;

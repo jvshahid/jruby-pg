@@ -5,16 +5,27 @@ require 'pg'
 module PG::TestingHelpers
   alias :old_log_and_run :log_and_run
 
+  def certs_directory
+    File.expand_path "#{__FILE__}/../../../certs"
+  end
+
 	def log_and_run( logpath, *cmd )
     return old_log_and_run logpath, cmd unless cmd.first =~ /initdb/
 
     tmp = old_log_and_run logpath, cmd
     File.open("#{@test_pgdata}/pg_hba.conf", "w") do |f|
       f.puts "# TYPE    DATABASE        USER            ADDRESS         METHOD"
+      f.puts "  hostssl all             ssl             127.0.0.1/32    password"
+      f.puts "  host    all             ssl             127.0.0.1/32    reject"
       f.puts "  host    all             password        127.0.0.1/32    password"
       f.puts "  host    all             encrypt         127.0.0.1/32    md5"
       f.puts "  host    all             all             127.0.0.1/32    trust"
     end
+    File.open("#{@test_pgdata}/postgresql.conf", "a") do |f|
+      f.puts "ssl = yes"
+    end
+    FileUtils.cp "#{certs_directory}/server.key", @test_pgdata
+    FileUtils.cp "#{certs_directory}/server.crt", @test_pgdata
     tmp
   end
 end
@@ -171,7 +182,29 @@ describe PG::Connection do
       rescue
         # ignore
       end
-      @conn2 = PG.connect "#{@conninfo} user=password"
+      @conn2 = PG.connect "#{@conninfo} user=password password=secret"
+    end
+
+    it 'fails if no password was given and a password is required' do
+      expect {
+        @conn.exec 'ROLLBACK'
+        begin
+          @conn.exec "CREATE USER password WITH PASSWORD 'secret'"
+        rescue
+          # ignore
+        end
+        @conn2 = PG.connect "#{@conninfo} user=password"
+      }.to raise_error(RuntimeError, /authentication failed/)
+    end
+
+    it 'connects to the server using ssl' do
+      @conn.exec 'ROLLBACK'
+      begin
+        @conn.exec "CREATE USER ssl WITH PASSWORD 'secret'"
+      rescue
+        # ignore
+      end
+      @conn2 = PG.connect "#{@conninfo} user=ssl password=secret ssl=require"
     end
 
     it 'can authenticate clients using the md5 hash' do
@@ -181,17 +214,7 @@ describe PG::Connection do
       rescue
         # ignore
       end
-      @conn2 = PG.connect "#{@conninfo} user=encrypt"
-    end
-
-    it 'fails if no password was given and a password is required' do
-      @conn.exec 'ROLLBACK'
-      begin
-        @conn.exec "CREATE USER encrypt WITH PASSWORD 'md5'"
-      rescue
-        # ignore
-      end
-      @conn2 = PG.connect "#{@conninfo} user=encrypt"
+      @conn2 = PG.connect "#{@conninfo} user=encrypt password=md5"
     end
 
     it 'fails if the user does not exist' do

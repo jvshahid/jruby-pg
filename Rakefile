@@ -81,6 +81,6 @@ Dir.glob('jruby-spec/*.rb').each do |f|
 end
 
 task :java_debug do
-  ENV['JAVA_OPTS'] = '-Xdebug -Xrunjdwp:transport=dt_socket,address=8080,server=y,suspend=y' if ENV['JAVA_DEBUG']
+  ENV['JAVA_OPTS'] = '-Xdebug -Xrunjdwp:transport=dt_socket,address=8080,server=y,suspend=n' if ENV['JAVA_DEBUG'] == '1'
 end
 # vim: syntax=ruby

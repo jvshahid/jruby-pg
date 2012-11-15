@@ -4,6 +4,7 @@ package org.jruby.pg;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.nio.channels.SelectableChannel;
 import java.nio.channels.SocketChannel;
 import java.sql.SQLException;
 import java.util.HashMap;
@@ -362,6 +363,7 @@ public class Connection extends RubyObject {
 
             LAST_CONNECTION = this;
         } catch (Exception e) {
+            e.printStackTrace();
             throw context.runtime.newRuntimeError(e.getLocalizedMessage());
         }
         return context.nil;
@@ -484,7 +486,7 @@ public class Connection extends RubyObject {
 
     @JRubyMethod
     public IRubyObject socket(ThreadContext context) {
-      SocketChannel socket = postgresqlConnection.getSocket();
+      SelectableChannel socket = postgresqlConnection.getSocket();
       RubyIO rubyIO = RubyIO.newIO(context.runtime, socket);
       return rubyIO.fileno(context);
     }
