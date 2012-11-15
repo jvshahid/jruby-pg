@@ -41,6 +41,7 @@ import org.jruby.pg.internal.messages.ParameterStatus;
 import org.jruby.pg.internal.messages.Parse;
 import org.jruby.pg.internal.messages.PasswordMessage;
 import org.jruby.pg.internal.messages.ProtocolMessage;
+import org.jruby.pg.internal.messages.Sync;
 import org.jruby.pg.internal.messages.ProtocolMessage.MessageType;
 import org.jruby.pg.internal.messages.ProtocolMessageBuffer;
 import org.jruby.pg.internal.messages.Query;
@@ -50,7 +51,6 @@ import org.jruby.pg.internal.messages.SSLRequest;
 import org.jruby.pg.internal.messages.Startup;
 import org.jruby.pg.internal.messages.Terminate;
 import org.jruby.pg.internal.messages.TransactionStatus;
-import org.jruby.pg.internal.messsages.Sync;
 
 public class PostgresqlConnection {
   /** Static API (create a new connection) **/

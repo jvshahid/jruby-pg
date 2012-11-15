@@ -1,8 +1,7 @@
-package org.jruby.pg.internal.messsages;
+package org.jruby.pg.internal.messages;
 
 import java.nio.ByteBuffer;
 
-import org.jruby.pg.internal.messages.ProtocolMessage;
 
 public class Sync extends ProtocolMessage {
   private final byte[] bytes = {'S', 0, 0, 0, 4};
