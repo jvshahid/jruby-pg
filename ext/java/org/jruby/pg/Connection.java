@@ -757,12 +757,17 @@ public class Connection extends RubyObject {
 
     @JRubyMethod
     public IRubyObject consume_input(ThreadContext context) {
+      try {
+        postgresqlConnection.consumeInput();
         return context.nil;
+      } catch (IOException e) {
+        throw newPgError(context, e.getLocalizedMessage(), null, encoding);
+      }
     }
 
     @JRubyMethod
     public IRubyObject is_busy(ThreadContext context) {
-        return context.nil;
+      return context.runtime.newBoolean(postgresqlConnection.isBusy());
     }
 
     @JRubyMethod
