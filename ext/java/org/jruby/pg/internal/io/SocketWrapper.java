@@ -13,7 +13,7 @@ import javax.net.ssl.SSLException;
 
 public interface SocketWrapper {
   int outBufferRemaining();
-  int shouldWaitForData();
+  boolean shouldWaitForData();
   SocketChannel getSocket();
   void doHandshake() throws SSLException, IOException;
 

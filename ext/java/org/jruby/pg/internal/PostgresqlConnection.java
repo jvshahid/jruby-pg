@@ -111,12 +111,11 @@ public class PostgresqlConnection {
     }
     changeState();
 
-    if (state.isRead() && socket.shouldWaitForData() > 0) {
+    if (state.isRead() && !socket.shouldWaitForData()) {
       // we cannot return until the buffer is ready or
       // we're not in the read state anymore, otherwise
       // the user can block using select waiting for data
       // to read while the data is in buffered by out socket
-      System.out.println("trying to read again");
       consumeInput();
     }
   }
@@ -319,7 +318,7 @@ public class PostgresqlConnection {
     long startTime = System.currentTimeMillis();
     long timeLeft = timeout;
     while (isBusy() && (timeout == 0 || timeLeft > 0)) {
-      if (state.isRead() && socket.shouldWaitForData() > 0) {
+      if (state.isRead() && !socket.shouldWaitForData()) {
         // we have data that we can use
       } else {
         Selector selector = Selector.open();
@@ -331,9 +330,6 @@ public class PostgresqlConnection {
       consumeInput();
       timeLeft = timeout == 0 ? 0 : timeout - (System.currentTimeMillis() - startTime);
     }
-
-    System.out.println("isbusy: " + isBusy());
-    System.out.println("last result: " + lastResultSet);
 
     return !isBusy();
   }
@@ -347,7 +343,6 @@ public class PostgresqlConnection {
 
   public int getServerVersion() {
     String value = parameterValues.get("server_version");
-    System.out.println("server version: " + value);
     if (value == null)
       return 0;
     String[] parts = value.split("\\.");
@@ -371,7 +366,6 @@ public class PostgresqlConnection {
 
   public boolean getStandardConformingStrings() {
     String value = parameterValues.get("standard_conforming_strings");
-    System.out.println("value: " + value);
     if (value == null || !value.equals("on"))
       return false;
     return true;
@@ -483,13 +477,13 @@ public class PostgresqlConnection {
   }
 
   private void changeState() throws IOException {
-    System.out.println("before: " + state.name());
+    // System.out.println("before: " + state.name());
     if (state.isWrite()) {
       if (currentOutBuffer.remaining() == 0 && socket.outBufferRemaining() == 0)
         state = state.nextState();
     } else if (state.isRead()) {
       if (currentInMessage.remaining() == 0) {
-        System.out.println("received: " + currentInMessage.getMessage().getType().name());
+        // System.out.println("received: " + currentInMessage.getMessage().getType().name());
         processMessage();
         state = state.nextState(currentInMessage.getMessage().getType());
 
@@ -511,7 +505,6 @@ public class PostgresqlConnection {
 
     if (state == ConnectionState.ExtendedReadyForQuery) {
       if (extendedQueryIsOver()) {
-        System.out.println("sending sync to finish extended query");
         currentOutBuffer = new Sync().toBytes();
         state = ConnectionState.SendingSync;
       } else {
@@ -528,7 +521,7 @@ public class PostgresqlConnection {
       }
     }
 
-    System.out.println("after: " + state.name());
+    // System.out.println("after: " + state.name());
   }
 
   private PasswordMessage createPasswordMessage(ProtocolMessage message) {
@@ -629,7 +622,6 @@ public class PostgresqlConnection {
       inProgress = new ResultSet();
     switch (message.getType()) {
     case ErrorResponse:
-      System.out.println("setting error");
       inProgress.setErrorResponse((ErrorResponse) message);
       break;
     }
@@ -641,7 +633,6 @@ public class PostgresqlConnection {
 
   private void processQueryResponse() {
     ProtocolMessage message = currentInMessage.getMessage();
-    System.out.println("received: " + currentInMessage.getMessage().getType().name());
 
     switch (message.getType()) {
     case CopyInResponse:
@@ -673,7 +664,6 @@ public class PostgresqlConnection {
         inProgress = new ResultSet();
       ErrorResponse error = (ErrorResponse) message;
       inProgress.setErrorResponse(error);
-      System.out.println("Added error: " + error.getFields().get((byte) 'M'));
       break;
     case ReadyForQuery:
       lastResultSet.add(inProgress);

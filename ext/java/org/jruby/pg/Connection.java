@@ -520,7 +520,6 @@ public class Connection extends RubyObject {
         String query = args[0].convertToString().toString();
         ResultSet set = null;
         try {
-          System.out.println("query: " + query);
             if (args.length == 1) {
               set = postgresqlConnection.exec(query);
             } else {
@@ -544,7 +543,6 @@ public class Connection extends RubyObject {
         } catch (PostgresqlException e) {
           throw newPgError(context, e.getLocalizedMessage(), e.getResultSet(), encoding);
         } catch (Exception sqle) {
-            sqle.printStackTrace();
             throw newPgError(context, sqle.getLocalizedMessage(), null, encoding);
         }
 
@@ -923,7 +921,8 @@ public class Connection extends RubyObject {
           if (block.arity() == Arity.NO_ARGUMENTS) return block.call(context);
           RubyString condition = context.runtime.newString(notification.getCondition());
           RubyFixnum pid = context.runtime.newFixnum(notification.getPid());
-          RubyString payload = context.runtime.newString(notification.getPayload());
+          String javaPayload = notification.getPayload();
+          IRubyObject payload = javaPayload == null ? context.nil : context.runtime.newString(javaPayload);
           if (!block.arity().isFixed()) {
             return block.call(context, condition, pid, payload);
           } else if (block.arity().required() == 2) {

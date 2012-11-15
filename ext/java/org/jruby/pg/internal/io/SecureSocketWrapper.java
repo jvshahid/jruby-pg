@@ -178,9 +178,10 @@ public class SecureSocketWrapper implements SocketWrapper {
   }
 
   @Override
-  public int shouldWaitForData() {
-    if (lastStatus == Status.BUFFER_UNDERFLOW)
-      return 1;
-    return isPuttingInUnwrappedInBuffer ? in.remaining() : unwrappedIn.remaining();
+  public boolean shouldWaitForData() {
+    if (lastStatus == Status.BUFFER_UNDERFLOW) {
+      return true;
+    }
+    return isPuttingInUnwrappedInBuffer ? in.remaining() == 0 : unwrappedIn.remaining() == 0;
   }
 }

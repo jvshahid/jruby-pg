@@ -136,7 +136,12 @@ public class ProtocolMessageBuffer {
     case 'A':
       pid = rest.getInt();
       String condition = ByteUtils.byteBufferToString(ByteUtils.getNullTerminatedBytes(rest));
-      String payload = ByteUtils.byteBufferToString(ByteUtils.getNullTerminatedBytes(rest));
+      ByteBuffer payloadBytes = ByteUtils.getNullTerminatedBytes(rest);
+      String payload;
+      if (payloadBytes.remaining() == 0)
+        payload = null;
+      else
+        payload = ByteUtils.byteBufferToString(payloadBytes);
       return new NotificationResponse(pid, condition, payload);
     case 'Z':
       byte transactionStatus = rest.get();

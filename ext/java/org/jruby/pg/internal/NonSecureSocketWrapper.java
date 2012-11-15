@@ -64,7 +64,7 @@ public class NonSecureSocketWrapper implements SocketWrapper {
   }
 
   @Override
-  public int shouldWaitForData() {
-    return 0;
+  public boolean shouldWaitForData() {
+    return true;
   }
 }
