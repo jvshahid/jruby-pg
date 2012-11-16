@@ -272,24 +272,27 @@ describe PG::Connection do
       end
     end
 
-    it "correctly finishes COPY queries passed to #async_exec" # do
-    # 	@conn.async_exec( "COPY (SELECT 1 UNION ALL SELECT 2) TO STDOUT" )
-
-    # 	results = []
-    # 	begin
-    # 		data = @conn.get_copy_data( true )
-    # 		if false == data
-    # 			@conn.block( 2.0 )
-    # 			data = @conn.get_copy_data( true )
-    # 		end
-    # 		results << data if data
-    # 	end until data.nil?
-
-    # 	results.should have( 2 ).members
-    # 	results.should include( "1\n", "2\n" )
-    # end
-
-    # large object api
-    # notifications
+    it 'can copy data in and out correctly' do
+      @conn.exec %{ CREATE TABLE ALTERNATE_PARKING_NYC (
+                    Subject text,
+                    "Start Date" date,
+                    "Start Time" time,
+                    "End Date" date,
+                    "End Time" time,
+                    "All day event" boolean,
+                    "Reminder on/off" boolean,
+                    "Reminder Date" date,
+                    "Reminder Time" time)
+                  }
+      res = @conn.exec %{ Copy ALTERNATE_PARKING_NYC FROM STDIN WITH CSV HEADER QUOTE AS '"'}
+      res.result_status.should == PG::PGRES_COPY_IN
+      File.readlines('spec/jruby/data/sample.csv').each do |line|
+        @conn.put_copy_data(line)
+      end
+      @conn.put_copy_end
+      @conn.get_last_result
+      res = @conn.exec 'select * from ALTERNATE_PARKING_NYC'
+      res.ntuples.should == 40
+    end
   end
 end

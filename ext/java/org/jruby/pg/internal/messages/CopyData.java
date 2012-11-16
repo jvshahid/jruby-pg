@@ -25,8 +25,8 @@ public class CopyData extends ProtocolMessage {
     ByteArrayOutputStream out = new ByteArrayOutputStream();
     try {
       out.write('d');
-      out.write(getValue().remaining() + 4);
-      out.write(getValue().array(), getValue().arrayOffset() + getValue().position(), getValue().remaining());
+      ByteUtils.writeInt4(out, value.remaining() + 4);
+      out.write(value.array(), getValue().arrayOffset() + getValue().position(), getValue().remaining());
     } catch (Exception e) {
       // we cannot be here
     }

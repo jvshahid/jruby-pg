@@ -131,7 +131,6 @@ public class PostgresqlConnection {
   }
 
   public ResultSet exec(String query) throws IOException, PostgresqlException {
-    System.out.println("query: " + query);
     // ignore any prior results
     getLastResult();
     sendQuery(query);
@@ -276,10 +275,10 @@ public class PostgresqlConnection {
   public boolean isBusy() {
     if (state.shouldBlock() || state.isFlush() || state.isSync()) {
       return lastResultSet.isEmpty();
-    } else if (state.isCopyIn()) {
-      return copyData.isEmpty();
     } else if (state.isCopyOut()) {
-      return currentOutBuffer.remaining() == 0;
+      return copyData.isEmpty();
+    } else if (state.isCopyIn()) {
+      return currentOutBuffer.remaining() != 0;
     }
     return false;
   }
@@ -393,6 +392,9 @@ public class PostgresqlConnection {
 
   public boolean putCopyDone() throws IOException {
     try {
+      if (!state.isCopyIn()) {
+        throw new UnsupportedOperationException("Cannot put copy data");
+      }
       if (!nonBlocking)
         socket.configureBlocking(true);
 
@@ -401,7 +403,11 @@ public class PostgresqlConnection {
 
       if (currentOutBuffer.remaining() == 0) {
         currentOutBuffer = new CopyDone().toBytes();
-        flush();
+        if (state == ConnectionState.NewCopyInState)
+          state = ConnectionState.NewCopyDone;
+        if (state == ConnectionState.NewExtendedCopyInState)
+          state = ConnectionState.NewExtendedCopyDone;
+        consumeInput();	// call consume input to change the state if possible
         return true;
       } else {
         return false;
@@ -412,8 +418,12 @@ public class PostgresqlConnection {
     }
   }
 
-  public boolean putCopyData(CopyData data) throws IOException {
+  public boolean putCopyData(ByteBuffer data) throws IOException {
     try {
+      if (!state.isCopyIn()) {
+        throw new UnsupportedOperationException("Cannot put copy data");
+      }
+
       if (!nonBlocking)
         socket.configureBlocking(true);
 
@@ -421,7 +431,7 @@ public class PostgresqlConnection {
         flush();
 
       if (currentOutBuffer.remaining() == 0) {
-        currentOutBuffer = data.toBytes();
+        currentOutBuffer = new CopyData(data).toBytes();
         flush();
         return true;
       } else {
@@ -434,22 +444,22 @@ public class PostgresqlConnection {
   }
 
   public CopyData getCopyData(boolean async) throws IOException {
-    System.out.println("state: " + state.name());
+    if (!copyData.isEmpty())
+      return copyData.remove(0);
+
     try {
-      if (!state.isCopyIn())
+      if (!state.isCopyOut())
         return null;
 
       if (!async)
         socket.configureBlocking(true);
 
-      if (copyData.isEmpty())
-        consumeInput();
+      consumeInput();
 
-      if (!state.isCopyIn())
-        return null;
+      if (!copyData.isEmpty())
+        return copyData.remove(0);
 
-      CopyData data = copyData.isEmpty() ? COPY_DATA_NOT_READY : copyData.remove(0);
-      return data;
+      return COPY_DATA_NOT_READY;
     } finally {
       if (!async)
         socket.configureBlocking(false);
@@ -562,14 +572,11 @@ public class PostgresqlConnection {
   }
 
   private void changeState() throws IOException {
-    // System.out.println("before: " + state.name());
     if (state.isWrite()) {
       if (currentOutBuffer.remaining() == 0 && socket.outBufferRemaining() == 0)
         state = state.nextState();
     } else if (state.isRead()) {
       if (currentInMessage.remaining() == 0) {
-        // System.out.println("received: " +
-        // currentInMessage.getMessage().getType().name());
         processMessage();
         state = state.nextState(currentInMessage.getMessage().getType());
 
@@ -606,8 +613,6 @@ public class PostgresqlConnection {
         }
       }
     }
-
-    // System.out.println("after: " + state.name());
   }
 
   private PasswordMessage createPasswordMessage(ProtocolMessage message) {
@@ -659,9 +664,9 @@ public class PostgresqlConnection {
     case ReadingParameterStatus:
       processParameterStatusAndBackend();
       break;
-    case CopyInState:
-    case ExtendedCopyInState:
-      processCopyInResponse();
+    case NewCopyOutState:
+    case NewExtendedCopyOutState:
+      processCopyOutResponse();
       break;
     case ReadingParseResponse:
       processParseResponse();
@@ -682,7 +687,7 @@ public class PostgresqlConnection {
     }
   }
 
-  private void processCopyInResponse() {
+  private void processCopyOutResponse() {
     switch (currentInMessage.getMessage().getType()) {
     case CopyData:
       copyData.add((CopyData) currentInMessage.getMessage());

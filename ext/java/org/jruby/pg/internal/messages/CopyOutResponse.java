@@ -7,6 +7,6 @@ public class CopyOutResponse extends CopyResponse {
 
   @Override
   public MessageType getType() {
-    return MessageType.CopyInResponse;
+    return MessageType.CopyOutResponse;
   }
 }

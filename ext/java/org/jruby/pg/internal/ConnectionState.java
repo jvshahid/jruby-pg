@@ -25,10 +25,12 @@ public enum ConnectionState {
   ReadingExecuteResponse,
   ReadingReadyForQuery,
 
-  CopyInState,
-  CopyOutState,
-  ExtendedCopyInState,
-  ExtendedCopyOutState,
+  NewCopyInState,
+  NewCopyOutState,
+  NewExtendedCopyInState,
+  NewExtendedCopyOutState,
+  NewCopyDone,
+  NewExtendedCopyDone,
 
   SendingStartup,
   SendingAuthentication,
@@ -67,6 +69,14 @@ public enum ConnectionState {
       return SendingBindFlush;
     case SendingBindFlush:
       return ReadingBindResponse;
+
+    case NewCopyInState:
+    case NewExtendedCopyInState:
+      return this;
+    case NewCopyDone:
+      return ReadingQueryResponse;
+    case NewExtendedCopyDone:
+      return ReadingExecuteResponse;
 
     case SendingExecute:
       return SendingExecuteFlush;
@@ -141,16 +151,16 @@ public enum ConnectionState {
       case CommandComplete:
         return ExtendedReadyForQuery;
       case CopyInResponse:
-        return ExtendedCopyInState;
+        return NewExtendedCopyInState;
       case CopyOutResponse:
-        return ExtendedCopyOutState;
+        return NewExtendedCopyOutState;
       }
     case ReadingQueryResponse:
       switch (receivedMessageType) {
       case CopyInResponse:
-        return CopyInState;
+        return NewCopyInState;
       case CopyOutResponse:
-        return CopyOutState;
+        return NewCopyOutState;
       case CommandComplete:
       case EmptyQueryResponse:
       case RowDescription:
@@ -159,13 +169,13 @@ public enum ConnectionState {
       case ReadyForQuery:
         return ReadyForQuery;
       }
-    case CopyInState:
-    case ExtendedCopyInState:
+    case NewCopyOutState:
+    case NewExtendedCopyOutState:
       switch (receivedMessageType) {
       case CopyData:
         return this;
       case CopyDone:
-        return this == CopyInState ? ReadingQueryResponse : ReadingExecuteResponse;
+        return this == NewCopyOutState ? ReadingQueryResponse : ReadingExecuteResponse;
       default:
         throw new IllegalArgumentException("Unexpected message type: " + receivedMessageType.name());
       }
@@ -194,8 +204,8 @@ public enum ConnectionState {
     case ReadingDescribeResponse:
     case ReadingExecuteResponse:
     case ReadingReadyForQuery:
-    case CopyInState:
-    case ExtendedCopyInState:
+    case NewCopyOutState:
+    case NewExtendedCopyOutState:
       return true;
     default:
       return false;
@@ -216,8 +226,9 @@ public enum ConnectionState {
     case SendingDescribeFlush:
     case SendingExecute:
     case SendingExecuteFlush:
-    case CopyOutState:
-    case ExtendedCopyOutState:
+    case NewCopyInState:
+    case NewExtendedCopyInState:
+    case NewCopyDone:
       return true;
     default:
       return false;
@@ -226,8 +237,8 @@ public enum ConnectionState {
 
   public boolean isCopyOut() {
     switch (this) {
-    case CopyOutState:
-    case ExtendedCopyOutState:
+    case NewCopyOutState:
+    case NewExtendedCopyOutState:
       return true;
     default:
       return false;
@@ -236,8 +247,9 @@ public enum ConnectionState {
 
   public boolean isCopyIn() {
     switch (this) {
-    case CopyInState:
-    case ExtendedCopyInState:
+    case NewCopyInState:
+    case NewExtendedCopyInState:
+    case NewCopyDone:
       return true;
     default:
       return false;

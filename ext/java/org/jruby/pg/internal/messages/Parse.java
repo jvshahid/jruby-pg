@@ -19,7 +19,6 @@ public class Parse extends ProtocolMessage {
       for (int oid : oids)
         ByteUtils.writeInt4(out, oid);
     } catch (Exception e) {
-      e.printStackTrace();
       // we cannot be here
     }
     bytes = out.toByteArray();

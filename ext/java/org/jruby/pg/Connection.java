@@ -36,7 +36,6 @@ import org.jruby.pg.internal.PostgresqlConnection;
 import org.jruby.pg.internal.PostgresqlException;
 import org.jruby.pg.internal.ResultSet;
 import org.jruby.pg.internal.Value;
-import org.jruby.pg.internal.messages.ByteUtils;
 import org.jruby.pg.internal.messages.CopyData;
 import org.jruby.pg.internal.messages.Format;
 import org.jruby.pg.internal.messages.NotificationResponse;
@@ -371,7 +370,6 @@ public class Connection extends RubyObject {
 
             LAST_CONNECTION = this;
         } catch (Exception e) {
-            e.printStackTrace();
             throw context.runtime.newRuntimeError(e.getLocalizedMessage());
         }
         return context.nil;
@@ -544,7 +542,6 @@ public class Connection extends RubyObject {
         } catch (PostgresqlException e) {
           throw newPgError(context, e.getLocalizedMessage(), e.getResultSet(), encoding);
         } catch (Exception sqle) {
-            sqle.printStackTrace();
             throw newPgError(context, sqle.getLocalizedMessage(), null, encoding);
         }
 
@@ -639,7 +636,6 @@ public class Connection extends RubyObject {
 
     private ResultSet execPreparedCommon(ThreadContext context, IRubyObject[] args, boolean async) throws IOException, PostgresqlException {
       String queryName = args[0].asJavaString();
-      System.out.println("query name: " + queryName);
       Value[] values;
       int[] oids;
       if (args.length > 1) {
@@ -832,12 +828,22 @@ public class Connection extends RubyObject {
 
     @JRubyMethod
     public IRubyObject put_copy_data(ThreadContext context, IRubyObject arg0) {
-        return context.nil;
+      try {
+        byte[] bytes = ((RubyString) arg0).getBytes();
+        ByteBuffer data = ByteBuffer.wrap(bytes);
+        return context.runtime.newBoolean(postgresqlConnection.putCopyData(data));
+      } catch (IOException e) {
+        throw newPgError(context, e.getLocalizedMessage(), null, encoding);
+      }
     }
 
     @JRubyMethod(rest = true)
     public IRubyObject put_copy_end(ThreadContext context, IRubyObject[] args) {
-        return context.nil;
+      try {
+        return context.runtime.newBoolean(postgresqlConnection.putCopyDone());
+      } catch (IOException e) {
+        throw newPgError(context, e.getLocalizedMessage(), null, encoding);
+      }
     }
 
     @JRubyMethod(rest = true)

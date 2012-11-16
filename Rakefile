@@ -71,15 +71,21 @@ Rake::Task[:spec].prerequisites << :java_debug
 # sync specs from jruby-spec to spec/jruby
 target_dir = 'spec/jruby'
 directory target_dir
-Dir.glob('jruby-spec/*.rb').each do |f|
-  basename = File.basename f
-  new_name = "#{target_dir}/#{basename}"
-  t = file new_name => [f, target_dir] do |t|
-    FileUtils.cp f, new_name
+Dir.chdir 'jruby-spec' do
+  Dir.glob('**/*').each do |f|
+    file_name = "jruby-spec/#{f}"
+    new_name = "#{target_dir}/#{f}"
+    t = file new_name => [file_name, target_dir] do |t|
+      if File.directory? file_name
+        FileUtils.mkpath new_name
+      else
+        FileUtils.cp file_name, new_name
+        File.chmod 0444, new_name
+      end
+    end
+    Rake::Task[:'sync-files'].prerequisites << t
   end
-  Rake::Task[:'sync-files'].prerequisites << t
 end
-
 task :java_debug do
   ENV['JAVA_OPTS'] = '-Xdebug -Xrunjdwp:transport=dt_socket,address=8080,server=y,suspend=n' if ENV['JAVA_DEBUG'] == '1'
 end

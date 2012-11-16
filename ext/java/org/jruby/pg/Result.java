@@ -55,7 +55,7 @@ public class Result extends RubyObject {
 
     @JRubyMethod
     public IRubyObject result_status(ThreadContext context) {
-        return context.nil;
+      return context.runtime.newFixnum(jdbcResultSet.getStatus().ordinal());
     }
 
     @JRubyMethod
@@ -74,7 +74,6 @@ public class Result extends RubyObject {
       ErrorResponse error = jdbcResultSet.getError();
       if (error == null)
         return context.nil;
-      System.out.println("fields: " + error.getFields() + ", field: " + (char) errorCode);
       String field = error.getFields().get(errorCode);
       return field == null ? context.nil : context.runtime.newString(field);
     }
@@ -98,7 +97,6 @@ public class Result extends RubyObject {
 
     @JRubyMethod(name = {"nfields", "num_fields"})
     public IRubyObject nfields(ThreadContext context) {
-      System.out.println("result: " + jdbcResultSet);
       if (jdbcResultSet == null)
         throw context.runtime.newTypeError("foo");
       if (jdbcResultSet.getDescription() == null)
