@@ -77,13 +77,13 @@ describe PG::Connection do
       expect {
         @conn.prepare 'foo', 'SELECT $1::text AS n'
         @conn.prepare 'foo', 'SELECT $1::text AS n'
-      }.should raise_error(PGError, /already exists/i)
+      }.to raise_error(PGError, /already exists/i)
     end
 
     it 'return an error if a parameter is not bound to a type' do
       expect {
         @conn.prepare 'bar', 'SELECT $1 AS n'
-      }.should raise_error(PGError, /could not determine/i)
+      }.to raise_error(PGError, /could not determine/i)
     end
 
     it 'return an error if a prepared statement does not exist' do
