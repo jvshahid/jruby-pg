@@ -334,6 +334,12 @@ public class PostgresqlConnection {
     return !isBusy();
   }
 
+  public LargeObjectAPI getLargeObjectAPI() {
+    if (largeObjectAPI == null)
+      largeObjectAPI = new LargeObjectAPI(this);
+    return largeObjectAPI;
+  }
+
   public boolean flush() throws IOException {
     if (!state.isWrite() || currentOutBuffer.remaining() == 0)
       return true;
@@ -715,6 +721,7 @@ public class PostgresqlConnection {
   private Value[]                          values;
   private Format                           format;
 
+  private LargeObjectAPI largeObjectAPI;
   private TransactionStatus                transactionStatus;
   private ResultSet                        inProgress;
   private final List<ResultSet>            lastResultSet   = new LinkedList<ResultSet>();

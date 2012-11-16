@@ -7,7 +7,6 @@ import java.io.PrintWriter;
 import java.nio.channels.SelectableChannel;
 import java.sql.SQLException;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Properties;
@@ -31,6 +30,7 @@ import org.jruby.RubySymbol;
 import org.jruby.anno.JRubyMethod;
 import org.jruby.exceptions.RaiseException;
 import org.jruby.pg.internal.ConnectionState;
+import org.jruby.pg.internal.LargeObjectAPI;
 import org.jruby.pg.internal.PostgresqlConnection;
 import org.jruby.pg.internal.PostgresqlException;
 import org.jruby.pg.internal.ResultSet;
@@ -45,8 +45,6 @@ import org.jruby.runtime.builtin.IRubyObject;
 import org.jruby.util.ByteList;
 import org.postgresql.core.BaseConnection;
 import org.postgresql.core.Encoding;
-import org.postgresql.largeobject.LargeObject;
-import org.postgresql.largeobject.LargeObjectManager;
 import org.postgresql.util.UnixCrypt;
 
 public class Connection extends RubyObject {
@@ -882,10 +880,10 @@ public class Connection extends RubyObject {
       try {
         try {
           postgresqlConnection.exec("BEGIN");
-          if (block.arity().getValue() == 0)
-            block.call(context);
+          if (block.arity() == Arity.NO_ARGUMENTS)
+            block.yieldSpecific(context);
           else
-            block.call(context, this);
+            block.yieldSpecific(context, this);
           postgresqlConnection.exec("COMMIT");
         } catch (RuntimeException ex) {
           postgresqlConnection.exec("ROLLBACK");
@@ -959,21 +957,31 @@ public class Connection extends RubyObject {
     @JRubyMethod(name = {"lo_creat", "locreat"}, optional = 1)
     public IRubyObject lo_creat(ThreadContext context, IRubyObject[] args) {
       try {
-        LargeObjectManager manager = connection.getLargeObjectAPI();
-        long oid;
+        LargeObjectAPI manager = postgresqlConnection.getLargeObjectAPI();
+        int oid;
         if (args.length == 1)
-          oid = manager.createLO((Integer) args[0].toJava(Integer.class));
+          oid = manager.loCreat((Integer) args[0].toJava(Integer.class));
         else
-          oid = manager.createLO();
+          oid = manager.loCreat(0);
         return new RubyFixnum(context.runtime, oid);
-      } catch (SQLException e) {
-        throw newPgError(context, "lo_create failed", null, encoding);
+      } catch (PostgresqlException e) {
+        throw newPgError(context, "lo_create failed: " + e.getLocalizedMessage(), e.getResultSet(), encoding);
+      } catch (IOException e) {
+        throw newPgError(context, "lo_create failed: " + e.getLocalizedMessage(), null, encoding);
       }
     }
 
     @JRubyMethod(name = {"lo_create", "locreate"})
     public IRubyObject lo_create(ThreadContext context, IRubyObject arg0) {
-      return lo_creat(context, new IRubyObject[0]);
+      try {
+        LargeObjectAPI manager = postgresqlConnection.getLargeObjectAPI();
+        int oid = manager.loCreate((Integer) arg0.toJava(Integer.class));
+        return new RubyFixnum(context.runtime, oid);
+      } catch (PostgresqlException e) {
+        throw newPgError(context, "lo_create failed: " + e.getLocalizedMessage(), e.getResultSet(), encoding);
+      } catch (IOException e) {
+        throw newPgError(context, "lo_create failed: " + e.getLocalizedMessage(), null, encoding);
+      }
     }
 
     @JRubyMethod(name = {"lo_import", "loimport"})
@@ -989,75 +997,118 @@ public class Connection extends RubyObject {
     @JRubyMethod(name = {"lo_open", "loopen"}, required = 1, optional = 1)
     public IRubyObject lo_open(ThreadContext context, IRubyObject [] args) {
       try {
-        LargeObject object;
+        int fd;
         long oidLong = (Long) args[0].toJava(Long.class);
         if (args.length == 1)
-          object = connection.getLargeObjectAPI().open(oidLong);
+          fd = postgresqlConnection.getLargeObjectAPI().loOpen((int) oidLong);
         else
-          object = connection.getLargeObjectAPI().open(oidLong, (Integer) args[1].toJava(Integer.class));
+          fd = postgresqlConnection.getLargeObjectAPI().loOpen((int) oidLong, (Integer) args[1].toJava(Integer.class));
 
-        return new LargeObjectFd(context.runtime, (RubyClass)context.runtime.getClassFromPath("PG::LargeObjectFd"), object);
-      } catch (SQLException e) {
-        throw newPgError(context, e.getLocalizedMessage(), null, encoding);
+        return context.runtime.newFixnum(fd);
+      } catch (IOException e) {
+        throw newPgError(context, "lo_open failed: " + e.getLocalizedMessage(), null, encoding);
+      } catch (PostgresqlException e) {
+        throw newPgError(context, "lo_open failed: " + e.getLocalizedMessage(), e.getResultSet(), encoding);
       }
     }
 
-    @JRubyMethod(name = {"lo_write", "lowrite"}, required = 2, argTypes = {LargeObjectFd.class, RubyString.class})
+    @JRubyMethod(name = {"lo_write", "lowrite"}, required = 2, argTypes = {RubyFixnum.class, RubyString.class})
     public IRubyObject lo_write(ThreadContext context, IRubyObject object, IRubyObject buffer) {
       try {
-        LargeObject largeObject = ((LargeObjectFd) object).getObject();
+        long fd = ((RubyFixnum) object).getLongValue();
         RubyString bufferString = (RubyString) buffer;
-        largeObject.write(bufferString.getBytes());
-        return bufferString.length();
-      } catch (SQLException e) {
-        throw newPgError(context, e.getLocalizedMessage(), null, encoding);
+        int count = postgresqlConnection.getLargeObjectAPI().loWrite((int) fd, bufferString.getBytes());
+        return context.runtime.newFixnum(count);
+      } catch (IOException e) {
+        throw newPgError(context, "lo_write failed: " + e.getLocalizedMessage(), null, encoding);
+      } catch (PostgresqlException e) {
+        throw newPgError(context, "lo_write failed: " + e.getLocalizedMessage(), e.getResultSet(), encoding);
       }
     }
 
-    @JRubyMethod(name = {"lo_read", "loread"}, required = 2, argTypes = {LargeObjectFd.class, RubyFixnum.class})
+    @JRubyMethod(name = {"lo_read", "loread"}, required = 2, argTypes = {RubyFixnum.class, RubyFixnum.class})
     public IRubyObject lo_read(ThreadContext context, IRubyObject arg0, IRubyObject arg1) {
       try {
-        LargeObject largeObject = ((LargeObjectFd) arg0).getObject();
-        byte[] b = largeObject.read((int) ((RubyFixnum) arg1).getLongValue());
+        int fd = (int) ((RubyFixnum) arg0).getLongValue();
+        int count = (int) ((RubyFixnum) arg1).getLongValue();
+        byte[] b = postgresqlConnection.getLargeObjectAPI().loRead(fd, count);
         if (b.length == 0)
           return context.nil;
         return context.runtime.newString(new ByteList(b));
-      } catch (SQLException e) {
-        throw newPgError(context, e.getLocalizedMessage(), null, encoding);
+      } catch (PostgresqlException e) {
+        throw newPgError(context, "lo_read failed: " + e.getLocalizedMessage(), e.getResultSet(), encoding);
+      } catch (IOException e) {
+        throw newPgError(context, "lo_read failed: " + e.getLocalizedMessage(), null, encoding);
       }
     }
 
     @JRubyMethod(name = {"lo_lseek", "lolseek", "lo_seek", "loseek"}, required = 3,
-        argTypes = {LargeObjectFd.class, RubyFixnum.class, RubyFixnum.class})
-    public IRubyObject lo_lseek(ThreadContext context, IRubyObject object, IRubyObject offset, IRubyObject whence) {
+        argTypes = {RubyFixnum.class, RubyFixnum.class, RubyFixnum.class})
+    public IRubyObject lo_lseek(ThreadContext context, IRubyObject _fd, IRubyObject _offset, IRubyObject _whence) {
       try {
-        LargeObject largeObject = ((LargeObjectFd) object).getObject();
-        largeObject.seek((int) ((RubyFixnum) offset).getLongValue(),
-            (int) ((RubyFixnum) whence).getLongValue());
-        return new RubyFixnum(context.runtime, largeObject.tell());
-      } catch (SQLException e) {
-        throw newPgError(context, e.getLocalizedMessage(), null, encoding);
+        int offset = (int) ((RubyFixnum) _offset).getLongValue();
+        int fd = (int) ((RubyFixnum) _fd).getLongValue();
+        int whence = (int) ((RubyFixnum) _whence).getLongValue();
+        int where = postgresqlConnection.getLargeObjectAPI().loSeek(fd, offset, whence);
+        return new RubyFixnum(context.runtime, where);
+      } catch (IOException e) {
+        throw newPgError(context, "lo_lseek failed: " + e.getLocalizedMessage(), null, encoding);
+      } catch (PostgresqlException e) {
+        throw newPgError(context, "lo_lseek failed: " + e.getLocalizedMessage(), e.getResultSet(), encoding);
       }
     }
 
-    @JRubyMethod(name = {"lo_tell", "lotell"})
-    public IRubyObject lo_tell(ThreadContext context, IRubyObject arg0) {
-        return context.nil;
+    @JRubyMethod(name = {"lo_tell", "lotell"}, required = 1, argTypes = {RubyFixnum.class})
+    public IRubyObject lo_tell(ThreadContext context, IRubyObject _fd) {
+      try {
+        int fd = (int) ((RubyFixnum) _fd).getLongValue();
+        int where = postgresqlConnection.getLargeObjectAPI().loTell(fd);
+        return context.runtime.newFixnum(where);
+      } catch (IOException e) {
+        throw newPgError(context, "lo_tell failed: " + e.getLocalizedMessage(), null, encoding);
+      } catch (PostgresqlException e) {
+        throw newPgError(context, "lo_tell failed: " + e.getLocalizedMessage(), e.getResultSet(), encoding);
+      }
     }
 
-    @JRubyMethod(name = {"lo_truncate", "lotruncate"})
-    public IRubyObject lo_truncate(ThreadContext context, IRubyObject arg0, IRubyObject arg1) {
-        return context.nil;
+    @JRubyMethod(name = {"lo_truncate", "lotruncate"}, required = 2, argTypes = {RubyFixnum.class, RubyFixnum.class})
+    public IRubyObject lo_truncate(ThreadContext context, IRubyObject _fd, IRubyObject _len) {
+      try {
+        int fd = (int) ((RubyFixnum) _fd).getLongValue();
+        int len = (int) ((RubyFixnum) _len).getLongValue();
+        int value = postgresqlConnection.getLargeObjectAPI().loTruncate(fd, len);
+        return context.runtime.newFixnum(value);
+      } catch (PostgresqlException e) {
+        throw newPgError(context, "lo_tell failed: " + e.getLocalizedMessage(), e.getResultSet(), encoding);
+      } catch (IOException e) {
+        throw newPgError(context, "lo_tell failed: " + e.getLocalizedMessage(), null, encoding);
+      }
     }
 
-    @JRubyMethod(name = {"lo_close", "loclose"})
-    public IRubyObject lo_close(ThreadContext context, IRubyObject arg0) {
-        return context.nil;
+    @JRubyMethod(name = {"lo_close", "loclose"}, required = 1, argTypes = {RubyFixnum.class})
+    public IRubyObject lo_close(ThreadContext context, IRubyObject _fd) {
+      try {
+        int fd = (int) ((RubyFixnum) _fd).getLongValue();
+        int value = postgresqlConnection.getLargeObjectAPI().loClose(fd);
+        return context.runtime.newFixnum(value);
+      } catch (IOException e) {
+        throw newPgError(context, "lo_close failed: " + e.getLocalizedMessage(), null, encoding);
+      } catch (PostgresqlException e) {
+        throw newPgError(context, "lo_close failed: " + e.getLocalizedMessage(), e.getResultSet(), encoding);
+      }
     }
 
-    @JRubyMethod(name = {"lo_unlink", "lounlink"})
-    public IRubyObject lo_unlink(ThreadContext context, IRubyObject arg0) {
-        return context.nil;
+    @JRubyMethod(name = {"lo_unlink", "lounlink"}, required = 1, argTypes = {RubyFixnum.class})
+    public IRubyObject lo_unlink(ThreadContext context, IRubyObject _fd) {
+      try {
+        int fd = (int) ((RubyFixnum) _fd).getLongValue();
+        int value = postgresqlConnection.getLargeObjectAPI().loUnlink(fd);
+        return context.runtime.newFixnum(value);
+      } catch (IOException e) {
+        throw newPgError(context, "lo_unlink failed: " + e.getLocalizedMessage(), null, encoding);
+      } catch (PostgresqlException e) {
+        throw newPgError(context, "lo_unlink failed: " + e.getLocalizedMessage(), e.getResultSet(), encoding);
+      }
     }
 
     /******     M17N     ******/

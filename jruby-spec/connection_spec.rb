@@ -223,6 +223,55 @@ describe PG::Connection do
       }.to raise_error(RuntimeError, /does not exist/)
     end
 
+    it "handles large object methods properly" do
+      fd = oid = 0
+      @conn.transaction do
+        oid = @conn.lo_create( 0 )
+        fd = @conn.lo_open( oid, PG::INV_READ|PG::INV_WRITE )
+        count = @conn.lo_write( fd, "foobar" )
+        @conn.lo_read( fd, 10 ).should be_nil()
+        @conn.lo_tell(fd).should ==(6)
+        @conn.lo_lseek( fd, 0, PG::SEEK_SET )
+        @conn.lo_tell(fd).should ==(0)
+        @conn.lo_read( fd, 10 ).should == 'foobar'
+      end
+
+    end
+    it "closes large objects properly" do
+      @conn.transaction do
+        oid = @conn.lo_create( 0 )
+        fd = @conn.lo_open( oid, PG::INV_READ|PG::INV_WRITE )
+        @conn.lo_close(fd)
+        expect {
+          @conn.lo_write(fd, 'foo')
+        }.to raise_error(PGError)
+      end
+    end
+
+    it "unlinks large objects properly" do
+      @conn.transaction do
+        oid = @conn.lo_create( 0 )
+        fd = @conn.lo_open( oid, PG::INV_READ|PG::INV_WRITE )
+        @conn.lo_unlink(oid)
+        expect {
+          @conn.lo_open(oid)
+        }.to raise_error(PGError)
+      end
+    end
+
+    it "truncates large objects properly" do
+      @conn.transaction do
+        oid = @conn.lo_create( 0 )
+        fd = @conn.lo_open( oid, PG::INV_READ|PG::INV_WRITE )
+        @conn.lo_write(fd, 'foobar')
+        @conn.lo_seek(fd, 0, PG::SEEK_SET )
+        @conn.lo_read(fd, 10).should ==('foobar')
+        @conn.lo_truncate(fd, 3)
+        @conn.lo_seek(fd, 0, PG::SEEK_SET )
+        @conn.lo_read(fd, 10).should ==('foo')
+      end
+    end
+
     it "correctly finishes COPY queries passed to #async_exec" # do
     # 	@conn.async_exec( "COPY (SELECT 1 UNION ALL SELECT 2) TO STDOUT" )
 
