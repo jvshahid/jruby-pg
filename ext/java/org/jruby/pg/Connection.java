@@ -4,6 +4,7 @@ package org.jruby.pg;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.nio.ByteBuffer;
 import java.nio.channels.SelectableChannel;
 import java.sql.SQLException;
 import java.util.HashMap;
@@ -35,6 +36,8 @@ import org.jruby.pg.internal.PostgresqlConnection;
 import org.jruby.pg.internal.PostgresqlException;
 import org.jruby.pg.internal.ResultSet;
 import org.jruby.pg.internal.Value;
+import org.jruby.pg.internal.messages.ByteUtils;
+import org.jruby.pg.internal.messages.CopyData;
 import org.jruby.pg.internal.messages.Format;
 import org.jruby.pg.internal.messages.NotificationResponse;
 import org.jruby.runtime.Arity;
@@ -541,6 +544,7 @@ public class Connection extends RubyObject {
         } catch (PostgresqlException e) {
           throw newPgError(context, e.getLocalizedMessage(), e.getResultSet(), encoding);
         } catch (Exception sqle) {
+            sqle.printStackTrace();
             throw newPgError(context, sqle.getLocalizedMessage(), null, encoding);
         }
 
@@ -837,8 +841,21 @@ public class Connection extends RubyObject {
     }
 
     @JRubyMethod(rest = true)
-    public IRubyObject get_copy_end(ThreadContext context, IRubyObject[] args) {
-        return context.nil;
+    public IRubyObject get_copy_data(ThreadContext context, IRubyObject[] args) {
+      try {
+        boolean async = false;
+        if (args.length == 1)
+          async = args[0].isTrue();
+        CopyData data = postgresqlConnection.getCopyData(async);
+        if (data == PostgresqlConnection.COPY_DATA_NOT_READY)
+          return context.runtime.getFalse();
+        else if (data == null)
+          return context.nil;
+        ByteBuffer value = data.getValue();
+        return context.runtime.newString(new ByteList(value.array(), value.arrayOffset() + value.position(), value.remaining()));
+      } catch (IOException e) {
+        throw newPgError(context, e.getLocalizedMessage(), null, encoding);
+      }
     }
 
     /******     PG::Connection INSTANCE METHODS: Control Functions     ******/

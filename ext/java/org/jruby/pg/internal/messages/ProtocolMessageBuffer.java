@@ -143,6 +143,24 @@ public class ProtocolMessageBuffer {
       else
         payload = ByteUtils.byteBufferToString(payloadBytes);
       return new NotificationResponse(pid, condition, payload);
+    case 'G':
+      Format overallFormat = Format.isBinary(rest.get()) ? Format.Binary : Format.Text;
+      short numberOfFormats = rest.getShort();
+      Format [] formats = new Format[numberOfFormats];
+      for (int i = 0; i < numberOfFormats; i++)
+        formats[i] = Format.isBinary(rest.getShort()) ? Format.Binary : Format.Text;
+      return new CopyInResponse(overallFormat, formats);
+    case 'H':
+      overallFormat = Format.isBinary(rest.get()) ? Format.Binary : Format.Text;
+      numberOfFormats = rest.getShort();
+      formats = new Format[numberOfFormats];
+      for (int i = 0; i < numberOfFormats; i++)
+        formats[i] = Format.isBinary(rest.getShort()) ? Format.Binary : Format.Text;
+      return new CopyOutResponse(overallFormat, formats);
+    case 'd':
+      return new CopyData(rest);
+    case 'c':
+      return new CopyDone();
     case 'Z':
       byte transactionStatus = rest.get();
       return new ReadyForQuery(TransactionStatus.fromByte(transactionStatus), rest.capacity() + 4);

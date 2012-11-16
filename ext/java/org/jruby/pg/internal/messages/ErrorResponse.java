@@ -58,6 +58,6 @@ public class ErrorResponse extends BackendMessage {
 
   public boolean isFatal() {
     String string = fields.get('S');
-    return string.equals("FATAL");
+    return string != null && string.equals("FATAL");
   }
 }

@@ -25,6 +25,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 
+import org.jruby.pg.internal.ResultSet.ResultStatus;
 import org.jruby.pg.internal.io.SecureSocketWrapper;
 import org.jruby.pg.internal.io.SocketWrapper;
 import org.jruby.pg.internal.messages.AuthenticationMD5Password;
@@ -32,6 +33,8 @@ import org.jruby.pg.internal.messages.BackendKeyData;
 import org.jruby.pg.internal.messages.Bind;
 import org.jruby.pg.internal.messages.CancelRequest;
 import org.jruby.pg.internal.messages.Close.StatementType;
+import org.jruby.pg.internal.messages.CopyData;
+import org.jruby.pg.internal.messages.CopyDone;
 import org.jruby.pg.internal.messages.DataRow;
 import org.jruby.pg.internal.messages.Describe;
 import org.jruby.pg.internal.messages.ErrorResponse;
@@ -54,6 +57,8 @@ import org.jruby.pg.internal.messages.Terminate;
 import org.jruby.pg.internal.messages.TransactionStatus;
 
 public class PostgresqlConnection {
+  public static final CopyData COPY_DATA_NOT_READY = new CopyData(null);
+
   /** Static API (create a new connection) **/
   public static PostgresqlConnection connectDb(Properties props) throws Exception {
     PostgresqlConnection connection = new PostgresqlConnection(props);
@@ -126,6 +131,7 @@ public class PostgresqlConnection {
   }
 
   public ResultSet exec(String query) throws IOException, PostgresqlException {
+    System.out.println("query: " + query);
     // ignore any prior results
     getLastResult();
     sendQuery(query);
@@ -270,6 +276,10 @@ public class PostgresqlConnection {
   public boolean isBusy() {
     if (state.shouldBlock() || state.isFlush() || state.isSync()) {
       return lastResultSet.isEmpty();
+    } else if (state.isCopyIn()) {
+      return copyData.isEmpty();
+    } else if (state.isCopyOut()) {
+      return currentOutBuffer.remaining() == 0;
     }
     return false;
   }
@@ -298,6 +308,10 @@ public class PostgresqlConnection {
     prevResult = result = null;
     while ((result = getResult()) != null) {
       prevResult = result;
+
+      // break out of the loop if a copy command has started
+      if (result.getStatus() == ResultStatus.PGRES_COPY_IN || result.getStatus() == ResultStatus.PGRES_COPY_OUT)
+        break;
     }
     return prevResult;
   }
@@ -375,6 +389,71 @@ public class PostgresqlConnection {
     if (value == null || !value.equals("on"))
       return false;
     return true;
+  }
+
+  public boolean putCopyDone() throws IOException {
+    try {
+      if (!nonBlocking)
+        socket.configureBlocking(true);
+
+      if (currentOutBuffer.remaining() != 0)
+        flush();
+
+      if (currentOutBuffer.remaining() == 0) {
+        currentOutBuffer = new CopyDone().toBytes();
+        flush();
+        return true;
+      } else {
+        return false;
+      }
+    } finally {
+      if (!nonBlocking)
+        socket.configureBlocking(false);
+    }
+  }
+
+  public boolean putCopyData(CopyData data) throws IOException {
+    try {
+      if (!nonBlocking)
+        socket.configureBlocking(true);
+
+      if (currentOutBuffer.remaining() != 0)
+        flush();
+
+      if (currentOutBuffer.remaining() == 0) {
+        currentOutBuffer = data.toBytes();
+        flush();
+        return true;
+      } else {
+        return false;
+      }
+    } finally {
+      if (!nonBlocking)
+        socket.configureBlocking(false);
+    }
+  }
+
+  public CopyData getCopyData(boolean async) throws IOException {
+    System.out.println("state: " + state.name());
+    try {
+      if (!state.isCopyIn())
+        return null;
+
+      if (!async)
+        socket.configureBlocking(true);
+
+      if (copyData.isEmpty())
+        consumeInput();
+
+      if (!state.isCopyIn())
+        return null;
+
+      CopyData data = copyData.isEmpty() ? COPY_DATA_NOT_READY : copyData.remove(0);
+      return data;
+    } finally {
+      if (!async)
+        socket.configureBlocking(false);
+    }
   }
 
   /** the shitty implementation the makes the connection ticks **/
@@ -489,7 +568,8 @@ public class PostgresqlConnection {
         state = state.nextState();
     } else if (state.isRead()) {
       if (currentInMessage.remaining() == 0) {
-        // System.out.println("received: " + currentInMessage.getMessage().getType().name());
+        // System.out.println("received: " +
+        // currentInMessage.getMessage().getType().name());
         processMessage();
         state = state.nextState(currentInMessage.getMessage().getType());
 
@@ -579,6 +659,10 @@ public class PostgresqlConnection {
     case ReadingParameterStatus:
       processParameterStatusAndBackend();
       break;
+    case CopyInState:
+    case ExtendedCopyInState:
+      processCopyInResponse();
+      break;
     case ReadingParseResponse:
       processParseResponse();
       break;
@@ -595,6 +679,19 @@ public class PostgresqlConnection {
     case ReadingReadyForQuery:
       processSyncReadyForQuery();
       break;
+    }
+  }
+
+  private void processCopyInResponse() {
+    switch (currentInMessage.getMessage().getType()) {
+    case CopyData:
+      copyData.add((CopyData) currentInMessage.getMessage());
+      break;
+    case CopyDone:
+      break;
+    default:
+      throw new IllegalArgumentException("Unknown message type received while in copy in mode: "
+          + currentInMessage.getMessage().getType());
     }
   }
 
@@ -642,8 +739,19 @@ public class PostgresqlConnection {
 
     switch (message.getType()) {
     case CopyInResponse:
+      if (inProgress == null)
+        inProgress = new ResultSet();
+      inProgress.setStatus(ResultStatus.PGRES_COPY_IN);
+      lastResultSet.add(inProgress);
+      inProgress = null;
+      break;
     case CopyOutResponse:
-      throw new UnsupportedOperationException("Copy operations isn't supported yet");
+      if (inProgress == null)
+        inProgress = new ResultSet();
+      inProgress.setStatus(ResultStatus.PGRES_COPY_OUT);
+      lastResultSet.add(inProgress);
+      inProgress = null;
+      break;
     case CommandComplete:
       if (inProgress == null)
         inProgress = new ResultSet();
@@ -721,10 +829,11 @@ public class PostgresqlConnection {
   private Value[]                          values;
   private Format                           format;
 
-  private LargeObjectAPI largeObjectAPI;
+  private LargeObjectAPI                   largeObjectAPI;
   private TransactionStatus                transactionStatus;
   private ResultSet                        inProgress;
   private final List<ResultSet>            lastResultSet   = new LinkedList<ResultSet>();
+  private final List<CopyData>             copyData        = new LinkedList<CopyData>();
   private final List<NotificationResponse> notifications   = new LinkedList<NotificationResponse>();
   private SocketWrapper                    socket;
   private ConnectionState                  state           = ConnectionState.CONNECTION_BAD;

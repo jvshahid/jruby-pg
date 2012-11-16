@@ -25,6 +25,11 @@ public enum ConnectionState {
   ReadingExecuteResponse,
   ReadingReadyForQuery,
 
+  CopyInState,
+  CopyOutState,
+  ExtendedCopyInState,
+  ExtendedCopyOutState,
+
   SendingStartup,
   SendingAuthentication,
   SendingQuery,
@@ -135,11 +140,17 @@ public enum ConnectionState {
       switch(receivedMessageType) {
       case CommandComplete:
         return ExtendedReadyForQuery;
+      case CopyInResponse:
+        return ExtendedCopyInState;
+      case CopyOutResponse:
+        return ExtendedCopyOutState;
       }
     case ReadingQueryResponse:
       switch (receivedMessageType) {
       case CopyInResponse:
+        return CopyInState;
       case CopyOutResponse:
+        return CopyOutState;
       case CommandComplete:
       case EmptyQueryResponse:
       case RowDescription:
@@ -147,6 +158,16 @@ public enum ConnectionState {
         return this;
       case ReadyForQuery:
         return ReadyForQuery;
+      }
+    case CopyInState:
+    case ExtendedCopyInState:
+      switch (receivedMessageType) {
+      case CopyData:
+        return this;
+      case CopyDone:
+        return this == CopyInState ? ReadingQueryResponse : ReadingExecuteResponse;
+      default:
+        throw new IllegalArgumentException("Unexpected message type: " + receivedMessageType.name());
       }
     case ReadingReadyForQuery:
       switch(receivedMessageType) {
@@ -173,6 +194,8 @@ public enum ConnectionState {
     case ReadingDescribeResponse:
     case ReadingExecuteResponse:
     case ReadingReadyForQuery:
+    case CopyInState:
+    case ExtendedCopyInState:
       return true;
     default:
       return false;
@@ -193,6 +216,28 @@ public enum ConnectionState {
     case SendingDescribeFlush:
     case SendingExecute:
     case SendingExecuteFlush:
+    case CopyOutState:
+    case ExtendedCopyOutState:
+      return true;
+    default:
+      return false;
+    }
+  }
+
+  public boolean isCopyOut() {
+    switch (this) {
+    case CopyOutState:
+    case ExtendedCopyOutState:
+      return true;
+    default:
+      return false;
+    }
+  }
+
+  public boolean isCopyIn() {
+    switch (this) {
+    case CopyInState:
+    case ExtendedCopyInState:
       return true;
     default:
       return false;

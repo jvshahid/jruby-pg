@@ -52,14 +52,20 @@ public class ResultSet {
     return error;
   }
 
+  public void setStatus(ResultStatus status) {
+    this.status = status;
+  }
+
   public ResultStatus getStatus() {
+    if (status != null)
+      return status;
     if (error != null) {
       if (error.isFatal())
         return ResultStatus.PGRES_FATAL_ERROR;
       else
         return ResultStatus.PGRES_NONFATAL_ERROR;
     }
-    if (descrption.getColumns().length == 0)
+    if (descrption == null || descrption.getColumns().length == 0)
       return ResultStatus.PGRES_EMPTY_QUERY;
     return ResultStatus.PGRES_TUPLES_OK;
   }
